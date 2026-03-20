@@ -64,6 +64,36 @@ blaze test //third_party/py/torchtitan/experiments/torchax:torchax_train_test_tp
     --test_arg=--torchax_config.use_scan \
     --test_arg=--training.enable_cpu_offload
 ```
+AFMV7 3B Full FT on v6e-8 (53k TPS total, MFU ~20.2%):
+```
+blaze test //third_party/py/torchtitan/experiments/torchax:torchax_train_test_tpu_glp_2x4 \
+    --test_arg=-- \
+    --test_arg=--model.name=afmv7 \
+    --test_arg=--model.flavor=3B \
+    --test_arg=--job.config_file="third_party/py/torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b.toml" \
+    --test_arg=--training.dataset_path="third_party/py/torchtitan/tests/assets/c4_test" \
+    --test_arg=--model.hf_assets_path="third_party/py/torchtitan/tests/assets/tokenizer" \
+    --test_arg=--training.seq_len=8192 \
+    --test_arg=--training.global_batch_size=8 \
+    --test_arg=--training.steps=8 \
+    --test_arg=--torchax_config.use_torchax \
+    --test_arg=--torchax_config.use_scan
+```
+AFMV7 3B LoRA on v6e-8 (19.1k TPS total, MFU ~7.5%):
+```
+blaze test //third_party/py/torchtitan/experiments/torchax:torchax_train_test_tpu_glp_2x4 \
+    --test_arg=-- \
+    --test_arg=--model.name=afmv7 \
+    --test_arg=--model.flavor=3B-lora \
+    --test_arg=--job.config_file="third_party/py/torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b_lora.toml" \
+    --test_arg=--training.dataset_path="third_party/py/torchtitan/tests/assets/c4_test" \
+    --test_arg=--model.hf_assets_path="third_party/py/torchtitan/tests/assets/tokenizer" \
+    --test_arg=--training.seq_len=8192 \
+    --test_arg=--training.global_batch_size=8 \
+    --test_arg=--training.steps=8 \
+    --test_arg=--torchax_config.use_torchax \
+    --test_arg=--torchax_config.use_scan
+```
 Deepseek_v3 16B (override layer from 27 to 11, so ~6.3B-A1.3B, MFU ~23%):
 ```
 blaze test //third_party/py/torchtitan/experiments/torchax:torchax_train_test_tpu_vl_4x2x1 \

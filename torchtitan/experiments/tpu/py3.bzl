@@ -219,7 +219,7 @@ def py3_test(
         ("vf_megachip", run_on_vf_megachip, "requires-viperfish", "megachip", "1,1,1"),
         ("vf_2x2x1_megachip", run_on_vf_2x2x1_megachip, "requires-viperfish:4", "megachip", "2,2,1"),
         ("glp_1x1", run_on_glp_1x1, "requires-ghostlite", None, "1,1,1"),
-        ("glp_2x4", run_on_glp_2x4, "requires-ghostlite:8", None, "2,2,1"),
+        ("glp_2x4", run_on_glp_2x4, "requires-ghostlite:8", None, "2,4,1"),
         ("gf_1x1x1", run_on_gf_1x1x1, "requires-ghostfish", None, "1,1,1"),
         ("gf_2x2x1", run_on_gf_2x2x1, "requires-ghostfish:4", None, "2,2,1"),
     ]:

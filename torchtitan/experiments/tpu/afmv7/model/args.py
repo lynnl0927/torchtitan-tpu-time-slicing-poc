@@ -61,8 +61,17 @@ class AFMTextV7ModelArgs(BaseModelArgs):
         # sum of qk and v head dims (each = head_dim for AFMTextV7).
         head_dims = head_dim * 2
 
+        if self.use_lora:
+            nparams_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            base_nparams = nparams - nparams_trainable
+            # Base model params forward pass (2x) + backwards act grad only (2x) = 4x
+            # LoRA trainable params forward + backward (grad act + grad weight) = 6x
+            param_flops = 4 * (base_nparams - nparams_embedding) + 6 * nparams_trainable
+        else:
+            param_flops = 6 * (nparams - nparams_embedding)
+
         num_flops_per_token = (
-            6 * (nparams - nparams_embedding)
+            param_flops
             + 6 * self.num_layers * self.num_heads * head_dims * seq_len
         )
         return nparams, num_flops_per_token
