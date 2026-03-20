@@ -1,0 +1,72 @@
+[job]
+dump_folder = "./outputs"
+description = "AFMTextV7 debug training"
+print_config = false
+
+[profiling]
+enable_profiling = false
+save_traces_folder = "profile_trace"
+profile_freq = 10
+enable_memory_snapshot = false
+save_memory_snapshot_folder = "memory_snapshot"
+
+[metrics]
+log_freq = 1
+disable_color_printing = false
+enable_tensorboard = false
+save_tb_folder = "tb"
+enable_wandb = false
+
+[model]
+name = "afmv7_tpu"
+flavor = "debugmodel"
+# For debug runs, uses the built-in HF test tokenizer (vocab_size=2002).
+# For production, point to a SentencePiece .model file or directory containing one.
+hf_assets_path = "./tests/assets/tokenizer"
+
+[optimizer]
+name = "AdamW"
+lr = 8e-4
+eps = 1e-8
+
+[lr_scheduler]
+warmup_steps = 2
+decay_ratio = 0.8
+decay_type = "linear"
+min_lr_factor = 0.0
+
+[training]
+local_batch_size = 2
+seq_len = 32
+max_norm = 1.0
+steps = 10
+dataset = "c4_test"
+dtype = "bfloat16"
+mixed_precision_param = "bfloat16"
+
+[parallelism]
+data_parallel_replicate_degree = 1
+data_parallel_shard_degree = -1
+fsdp_reshard_after_forward = "default"
+tensor_parallel_degree = 1
+enable_async_tensor_parallel = false
+pipeline_parallel_degree = 1
+context_parallel_degree = 1
+
+[checkpoint]
+enable = false
+folder = "checkpoint"
+interval = 10
+
+[activation_checkpoint]
+mode = "full"  # ["none", "full"] — uses TAMM's checkpoint_activations()
+
+[compile]
+enable = false
+components = ["model", "loss"]
+
+[validation]
+enable = false
+dataset = "c4_test"
+freq = 5
+steps = 10

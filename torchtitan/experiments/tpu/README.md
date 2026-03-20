@@ -111,7 +111,7 @@ git clone https://github.com/google-pytorch/torchtitan   # This repository will 
 cd torchtitan
 pip install -r requirements.txt
 pip install -r .ci/docker/requirements-flux.txt
-pip install portpicker absl-py numpy gcsfs frozendict triton fairscale
+pip install portpicker absl-py numpy gcsfs frozendict triton fairscale tamm
 
 ```
 
