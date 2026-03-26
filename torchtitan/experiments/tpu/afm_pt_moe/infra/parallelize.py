@@ -1,4 +1,4 @@
-"""Parallelization utilities for AFMTextV7 on TPU."""
+"""Parallelization utilities for AFMPTMoe on TPU."""
 
 import torch
 from torch import nn
@@ -9,12 +9,11 @@ import torchtitan.config
 import torchtitan.distributed
 from torchtitan.experiments.tpu import tpu_job_config
 from torchtitan.experiments.tpu import workarounds
-from torchtitan.experiments.tpu.afmv7.model.model import OutputMode
 from torchtitan.models.llama3.infra.parallelize import disable_fsdp_gradient_division
 from torchtitan.tools.logging import logger
 
 
-def parallelize_afmv7(
+def parallelize_afm_pt_moe(
     model: nn.Module,
     parallel_dims: torchtitan.distributed.ParallelDims,
     job_config: (
@@ -22,20 +21,18 @@ def parallelize_afmv7(
         | torchtitan.experiments.tpu.tpu_job_config.TPUJobConfig
     ),
 ) -> nn.Module:
-  """Apply parallelism and activation checkpointing to AFMTextV7.
+  """Apply parallelism and activation checkpointing to AFMPTMoe.
 
   Supports:
   - Activation checkpointing (AC) via TAMM's native checkpoint_activations()
   - FSDP2 data parallelism (shard across fsdp mesh)
   - DDP-style replication (dp_replicate mesh, handled by FSDP2 replicate dim)
-  - LoRA fine-tuning: auto-detected from model structure; non-adapter params
-  frozen
 
-  Tensor Parallelism is not supported for AFMTextV7 since the TAMM model's
+  Tensor Parallelism is not supported for AFMPTMoe since the TAMM model's
   internal layer structure is not wired for DTensor-based TP.
 
   Args:
-    model: The AFMTextV7 model to parallelize.
+    model: The AFMPTMoe model to parallelize.
     parallel_dims: Parallelism dimensions.
     job_config: Job configuration.
 
@@ -47,34 +44,18 @@ def parallelize_afmv7(
       Parallelism is enabled.
   """
   if parallel_dims.tp_enabled:
-    raise RuntimeError("Tensor Parallelism is not supported for AFMTextV7 yet")
+    raise RuntimeError("Tensor Parallelism is not supported for AFMPTMoe yet")
 
-  use_splash_attention_kernel = False
-  use_loss_kernel = False
-  enable_amp = True
-  if isinstance(job_config, tpu_job_config.TPUJobConfig):
-    use_splash_attention_kernel = (
-        job_config.tpu_config.use_splash_attention_kernel
-    )
-    use_loss_kernel = job_config.tpu_config.use_loss_kernel
-    enable_amp = job_config.tpu_config.enable_amp
-
-  if use_splash_attention_kernel:
+  if (
+      isinstance(job_config, tpu_job_config.TPUJobConfig)
+      and job_config.tpu_config.use_splash_attention_kernel
+  ):
     workarounds.use_splash_attention_patch(model)
-
-  if use_loss_kernel:
-    # Enable Pallas loss: forward returns (hidden, weight.t()) so
-    # pallas_cross_entropy_loss can do fused linear+CE without materializing
-    # the full (B, S, vocab_size) logit tensor.
-    model._output_mode = OutputMode.HIDDEN_AND_WEIGHT
-    logger.info(
-        "Pallas loss kernel enabled for AFMv7: skipping output projection "
-        "in forward, deferring to pallas_cross_entropy_loss."
-    )
+  if (
+      isinstance(job_config, tpu_job_config.TPUJobConfig)
+      and job_config.tpu_config.use_loss_kernel
+  ):
     workarounds.use_output_projection_patch(model)
-
-  # Auto-detect LoRA: freeze base model params and unfreeze adapter params.
-  _maybe_freeze_for_lora(model)
 
   model_compile_enabled = (
       job_config.compile.enable and "model" in job_config.compile.components
@@ -89,7 +70,6 @@ def parallelize_afmv7(
   if model_compile_enabled:
     apply_compile(model, job_config.compile)
 
-  model_output_mode = getattr(model, "_output_mode", OutputMode.LOGITS)
   if parallel_dims.fsdp_enabled:
     names = (
         ["dp_replicate", "fsdp"]
@@ -109,9 +89,6 @@ def parallelize_afmv7(
         cpu_offload=job_config.training.enable_cpu_offload,
         reshard_after_forward_policy=job_config.parallelism.fsdp_reshard_after_forward,
         pp_enabled=parallel_dims.pp_enabled,
-        keep_output_weight_gathered=(
-            model_output_mode == OutputMode.HIDDEN_AND_WEIGHT),
-        enable_amp=enable_amp,
     )
 
     if parallel_dims.dp_replicate_enabled:
@@ -144,82 +121,40 @@ def parallelize_afmv7(
         cpu_offload=job_config.training.enable_cpu_offload,
         reshard_after_forward_policy=job_config.parallelism.fsdp_reshard_after_forward,
         pp_enabled=parallel_dims.pp_enabled,
-        keep_output_weight_gathered=(
-            model_output_mode== OutputMode.HIDDEN_AND_WEIGHT),
-        enable_amp=enable_amp,
     )
 
   return model
 
 
-def _maybe_freeze_for_lora(model: nn.Module) -> None:
-  """If the model contains TAMM AdaptedLayer modules (LoRA), freeze all base
-
-  model parameters and unfreeze only the adapter parameters.
-
-  This must run before FSDP wrapping so that FSDP2 can propagate
-  requires_grad=False to the sharded DTensors and skip gradient sync for
-  frozen parameters.
-  """
-  try:
-    from tamm.adapters import AdaptedLayer
-  except ImportError:
-    return
-
-  adapted_layers = [
-      m for m in model.model.modules() if isinstance(m, AdaptedLayer)
-  ]
-  if not adapted_layers:
-    return
-
-  # Freeze everything first.
-  frozen = 0
-  for p in model.model.parameters():
-    if p.requires_grad:
-      p.requires_grad_(False)
-      frozen += p.numel()
-
-  # Unfreeze only adapter parameters.
-  trainable = 0
-  for m in adapted_layers:
-    for p in m.adapters.parameters():
-      p.requires_grad_(True)
-      trainable += p.numel()
-
-  logger.info(
-      f"LoRA param freeze: {frozen:,} base params frozen, "
-      f"{trainable:,} adapter params trainable "
-      f"({100 * trainable / (frozen + trainable):.2f}%)"
-  )
-
-
 def apply_ac(model: nn.Module) -> None:
   """Apply activation checkpointing via TAMM's native API."""
-  logger.info("Applying activation checkpointing to AFMTextV7 segments.")
+  logger.info("Applying activation checkpointing to AFMPTMoe segments.")
   for segment in model.model.layers.children():
     for layer in segment.children():
-      layer.checkpoint_activations(use_reentrant=False)
+      if hasattr(layer, "checkpoint_activations"):
+        layer.checkpoint_activations(use_reentrant=False)
 
 
 def apply_compile(
     model: nn.Module, compile_config: "torchtitan.config.job_config.Compile"
 ) -> None:
-  """Apply torch.compile to each TransformerLayer in both segments.
+  """Apply torch.compile to each TransformerLayer in segments.
 
   Note: torch.compile may not work correctly on CPU — use only on TPU/GPU.
 
   Args:
-    model: The AFMTextV7 model.
+    model: The AFMPTMoe model.
     compile_config: Compile configuration.
   """
-  logger.info("Applying torch.compile to AFMTextV7 TransformerLayers.")
+  logger.info("Applying torch.compile to AFMPTMoe TransformerLayers.")
   inner = model.model
-  for seg in (inner.layers.segment_0, inner.layers.segment_1):
+  for seg in inner.layers.children():
     for layer_id, layer in seg.named_children():
-      compiled = torch.compile(
-          layer, backend=compile_config.backend, fullgraph=True
-      )
-      seg.register_module(layer_id, compiled)
+      if type(layer).__name__ == "TransformerLayer":
+        compiled = torch.compile(
+            layer, backend=compile_config.backend, fullgraph=True
+        )
+        seg.register_module(layer_id, compiled)
 
 
 def apply_fsdp(
@@ -230,10 +165,8 @@ def apply_fsdp(
     cpu_offload: bool,
     reshard_after_forward_policy: str,
     pp_enabled: bool,
-    keep_output_weight_gathered: bool = False,
-    enable_amp: bool = True,
 ) -> None:
-  """Wrap AFMTextV7 with FSDP2 (fully_shard).
+  """Wrap AFMPTMoe with FSDP2 (fully_shard).
 
   Shards at the individual TransformerLayer granularity inside each segment.
   Top-level non-layer children (embedding, norm, positional_encoding, etc.)
@@ -243,23 +176,20 @@ def apply_fsdp(
 
   Args:
     model: Model to wrap.
-    dtype: Base model dtype (what params are stored/initialized in).
-    param_dtype: Dtype to cast params to during all-gather for compute.
-    reduce_dtype: Dtype to use for gradient reduction (reduce-scatter).
+    dp_mesh: Device mesh.
+    param_dtype: Parameter dtype.
+    reduce_dtype: Reduce dtype.
     cpu_offload: Whether to enable CPU offloading.
     reshard_after_forward_policy: Reshard after forward policy.
     pp_enabled: Whether pipeline parallelism is enabled.
-    keep_output_weight_gathered: Whether to keep the output weight gathered.
-    enable_amp: Whether to enable AMP.
 
   Raises:
     ValueError: If reshard_after_forward_policy is invalid.
   """
-  fsdp_config: dict = {"mesh": dp_mesh}
-  if enable_amp:
-    fsdp_config["mp_policy"] = MixedPrecisionPolicy(
-        param_dtype=param_dtype, reduce_dtype=reduce_dtype
-    )
+  mp_policy = MixedPrecisionPolicy(
+      param_dtype=param_dtype, reduce_dtype=reduce_dtype
+  )
+  fsdp_config: dict = {"mesh": dp_mesh, "mp_policy": mp_policy}
   if cpu_offload:
     fsdp_config["cpu_offload"] = CPUOffload(offload_params=True)
 
@@ -276,42 +206,22 @@ def apply_fsdp(
           f" {reshard_after_forward_policy}"
       )
 
-  inner = model.model  # the TAMM AFMTextV7 module
+  inner = model.model  # the TAMM module
 
-  # Shard each individual TransformerLayer inside both segments for
+  # Shard each individual TransformerLayer inside segments for
   # fine-grained memory and compute overlap.
-  for layer in inner.layers.segment_0.children():
-    fully_shard(layer, **fsdp_config, reshard_after_forward=reshard)
-  for layer in inner.layers.segment_1.children():
-    fully_shard(layer, **fsdp_config, reshard_after_forward=reshard)
+  for seg in inner.layers.children():
+    for layer in seg.children():
+      if type(layer).__name__ == "TransformerLayer":
+        fully_shard(layer, **fsdp_config, reshard_after_forward=reshard)
 
   # Shard the full TAMM model (handles embedding, norm, positional_encoding,
   # and the TiedWeightLinear output_transform which shares weights with the
   # embedding — these must be sharded together to avoid mesh conflicts).
-  # When use_loss_kernel=True, TAMM returns (hidden, output_weight) and the
-  # loss kernel uses output_weight after the model forward. Setting
-  # reshard_after_forward=False keeps the output_transform weight gathered
-  # through the loss computation; otherwise FSDP frees it and the Pallas
-  # kernel receives a tensor with null data_ptr.
-  inner_reshard = False if keep_output_weight_gathered else reshard
-  fully_shard(inner, **fsdp_config, reshard_after_forward=inner_reshard)
+  fully_shard(inner, **fsdp_config, reshard_after_forward=reshard)
 
   # Shard the outer wrapper.
   fully_shard(model, **fsdp_config)
 
   # Disable FSDP's automatic gradient division for all FSDP modules
   disable_fsdp_gradient_division(model)
-
-
-def apply_ddp(
-    model: nn.Module,
-    dp_mesh: DeviceMesh,
-    enable_compile: bool,
-):
-    if enable_compile:
-        torch._dynamo.config.optimize_ddp = "ddp_optimizer"
-
-    # pyrefly: ignore [invalid-param-spec]
-    replicate(model, device_mesh=dp_mesh, bucket_cap_mb=100)
-
-    logger.info("Applied DDP to the model")

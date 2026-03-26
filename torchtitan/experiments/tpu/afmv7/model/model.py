@@ -1,5 +1,7 @@
 """AFMTextV7 model wrapper for TorchTitan."""
 
+import enum
+
 import torch
 import torch.nn as nn
 
@@ -7,6 +9,13 @@ from torchtitan.protocols.model import BaseModelArgs, ModelProtocol
 from torchtitan.tools.logging import logger
 
 from .args import AFMTextV7ModelArgs
+
+
+class OutputMode(enum.Enum):
+    """Controls what AFMTextV7Wrapper.forward returns."""
+    LOGITS = "logits"             # normal path: output.predictions
+    HIDDEN = "hidden"             # chunked CE: (hidden, None)
+    HIDDEN_AND_WEIGHT = "hidden_and_weight"  # Pallas: (hidden, weight.t())
 
 
 class AFMTextV7Wrapper(ModelProtocol):
@@ -22,6 +31,14 @@ class AFMTextV7Wrapper(ModelProtocol):
     def __init__(self, model_args: AFMTextV7ModelArgs) -> None:
         super().__init__(model_args)
         self._model_args = model_args
+        # Controls the forward return value.  Set by train_minimal/parallelize:
+        #   "logits"           — normal path, returns output.predictions
+        #   "hidden"           — chunked CE path, returns (hidden, None);
+        #                        caller gathers output_transform weight.
+        #   "hidden_and_weight"— Pallas path, returns (hidden, weight.t());
+        #                        FSDP keeps the inner model gathered after
+        #                        forward.
+        self._output_mode: OutputMode = OutputMode.LOGITS
 
         import tamm.models.afm_text
 
@@ -65,18 +82,37 @@ class AFMTextV7Wrapper(ModelProtocol):
         # all parameters are placed on the meta device.
         self.model: nn.Module = cfg.create_model()
 
-    def forward(self, tokens: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Run the model and return logits of shape (batch, seq_len, vocab_size)."""
+    def forward(self, tokens: torch.Tensor, **kwargs) -> torch.Tensor | tuple:
+        """Run the model forward pass.
+
+        Return value depends on _output_mode:
+          "logits"            — returns output.predictions (B, S, vocab_size)
+          "hidden"            — returns (hidden, None); caller gathers
+                                output_transform weight before the chunk loop.
+          "hidden_and_weight" — returns (hidden, weight.t()); FSDP keeps the
+                                inner model gathered so weight.t() stays valid
+                                for pallas_cross_entropy_loss.
+        """
+        if self._output_mode == OutputMode.HIDDEN_AND_WEIGHT:
+            output = self.model(tokens, mode="SKIP_OUTPUT_LAYER")
+            hidden = output.last_hidden_state  # (B, S, H)
+            weight = self.model.output_transform.weight  # (vocab_size, H)
+            return hidden, weight.t()  # (H, vocab_size)
+        if self._output_mode == OutputMode.HIDDEN:
+            output = self.model(tokens, mode="SKIP_OUTPUT_LAYER")
+            return output.last_hidden_state, None
         output = self.model(tokens)
         return output.predictions
 
     def init_weights(self, buffer_device: torch.device | None = None) -> None:
         """Initialize weights after model.to_empty(device) materializes storage.
 
-        Calls reset_parameters() on every submodule that has it. This covers
-        all standard PyTorch layers (nn.Linear, nn.Embedding, nn.LayerNorm, etc.)
-        and works correctly with FSDP2 DTensor parameters via in-place ops.
+        Uses simple uniform init rather than TAMM's reset_parameters() because
+        TAMM computes fan_in without accounting for FSDP parameter sharding,
+        which causes activation explosion and NaN loss when training with FSDP.
         """
-        for module in self.model.modules():
-            if hasattr(module, "reset_parameters"):
-                module.reset_parameters()
+        with torch.no_grad():
+            for param in self.model.parameters():
+                param.uniform_(-0.01, 0.01)
+            for buffer in self.model.buffers():
+                buffer.fill_(0)

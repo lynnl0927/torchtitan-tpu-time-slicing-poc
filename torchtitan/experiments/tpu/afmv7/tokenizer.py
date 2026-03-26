@@ -1,6 +1,6 @@
 """AFMTextV7 tokenizer wrapper for TorchTitan."""
 
-import os
+import os as os
 
 from torchtitan.components.tokenizer import BaseTokenizer, build_hf_tokenizer
 from torchtitan.config import JobConfig

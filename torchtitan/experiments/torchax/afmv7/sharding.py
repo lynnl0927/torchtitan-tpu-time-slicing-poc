@@ -24,9 +24,12 @@ sharding_map_original = {
     r'.*norm\.weight': ('fsdp',),
     # Output Transform
     r'^model\.output_transform\.weight$': ('tp', 'fsdp'),
-    # LoRA specific sharding
-    r'.*adapters.*a_transpose.*': ('fsdp', None),
-    r'.*adapters.*b_transpose.*': (None, 'fsdp'),
+    # LoRA Column Parallel (qkv, q, linear_0, linear_1)
+    r'.*(qkv_transform|q_transform|linear_0|linear_1).*adapters.*a_transpose.*': (None, None),
+    r'.*(qkv_transform|q_transform|linear_0|linear_1).*adapters.*b_transpose.*': (None, 'tp'),
+    # LoRA Row Parallel (output_transform)
+    r'.*(output_transform).*adapters.*a_transpose.*': ('tp', None),
+    r'.*(output_transform).*adapters.*b_transpose.*': (None, None),
 }
 
 sharding_map_scan = {
@@ -82,11 +85,18 @@ sharding_map_scan = {
     r'.*feed_forward\.output_transform\.(?:wrapped\.)?weight': ('fsdp', 'tp'),
     r'.*norm\.weight': ('fsdp',),
     r'^model\.output_transform\.weight$': ('tp', 'fsdp'),
-    # LoRA specific sharding
-    r'.*params.*adapters.*a_transpose.*': (None, 'fsdp', None),
-    r'.*params.*adapters.*b_transpose.*': (None, None, 'fsdp'),
-    r'.*adapters.*a_transpose.*': ('fsdp', None),
-    r'.*adapters.*b_transpose.*': (None, 'fsdp'),
+    # LoRA Scanned Column Parallel
+    r'.*params.*(qkv_transform|q_transform|linear_0|linear_1).*adapters.*a_transpose.*': (None, None, None),
+    r'.*params.*(qkv_transform|q_transform|linear_0|linear_1).*adapters.*b_transpose.*': (None, None, 'tp'),
+    # LoRA Scanned Row Parallel
+    r'.*params.*(output_transform).*adapters.*a_transpose.*': (None, 'tp', None),
+    r'.*params.*(output_transform).*adapters.*b_transpose.*': (None, None, None),
+    # LoRA Original Non-scanned Column Parallel
+    r'^(?!.*params).*(qkv_transform|q_transform|linear_0|linear_1).*adapters.*a_transpose.*': (None, None),
+    r'^(?!.*params).*(qkv_transform|q_transform|linear_0|linear_1).*adapters.*b_transpose.*': (None, 'tp'),
+    # LoRA Original Non-scanned Row Parallel
+    r'^(?!.*params).*(output_transform).*adapters.*a_transpose.*': ('tp', None),
+    r'^(?!.*params).*(output_transform).*adapters.*b_transpose.*': (None, None),
 }
 
 sharding_map_scan_lora = {
@@ -142,11 +152,18 @@ sharding_map_scan_lora = {
     r'.*feed_forward\.output_transform\.(?:wrapped\.)?weight': ('fsdp', 'tp'),
     r'.*norm\.weight': ('fsdp',),
     r'^model\.output_transform\.weight$': ('tp', 'fsdp'),
-    # LoRA specific sharding
-    r'.*params.*adapters.*a_transpose.*': (None, 'fsdp', None),
-    r'.*params.*adapters.*b_transpose.*': (None, None, 'fsdp'),
-    r'.*adapters.*a_transpose.*': ('fsdp', None),
-    r'.*adapters.*b_transpose.*': (None, 'fsdp'),
+    # LoRA Scanned Column Parallel
+    r'.*params.*(qkv_transform|q_transform|linear_0|linear_1).*adapters.*a_transpose.*': (None, None, None),
+    r'.*params.*(qkv_transform|q_transform|linear_0|linear_1).*adapters.*b_transpose.*': (None, None, 'tp'),
+    # LoRA Scanned Row Parallel
+    r'.*params.*(output_transform).*adapters.*a_transpose.*': (None, 'tp', None),
+    r'.*params.*(output_transform).*adapters.*b_transpose.*': (None, None, None),
+    # LoRA Original Non-scanned Column Parallel
+    r'^(?!.*params).*(qkv_transform|q_transform|linear_0|linear_1).*adapters.*a_transpose.*': (None, None),
+    r'^(?!.*params).*(qkv_transform|q_transform|linear_0|linear_1).*adapters.*b_transpose.*': (None, 'tp'),
+    # LoRA Original Non-scanned Row Parallel
+    r'^(?!.*params).*(output_transform).*adapters.*a_transpose.*': ('tp', None),
+    r'^(?!.*params).*(output_transform).*adapters.*b_transpose.*': (None, None),
 }
 
 sharding_map_scan_moe = {}

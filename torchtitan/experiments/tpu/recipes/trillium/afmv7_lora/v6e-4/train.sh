@@ -5,8 +5,4 @@ torchrun --nproc_per_node=4 -m torchtitan.experiments.tpu.train \
   --training.seq_len=8192 \
   --training.local_batch_size=1 \
   --parallelism.data_parallel_replicate_degree=1 \
-  --parallelism.data_parallel_shard_degree=4 \
-  --training.dtype=bfloat16 \
-  --training.mixed_precision_param=bfloat16 \
-  --training.mixed_precision_reduce=float32 \
-  --tpu_config.use_splash_attention_kernel
+  --parallelism.data_parallel_shard_degree=4

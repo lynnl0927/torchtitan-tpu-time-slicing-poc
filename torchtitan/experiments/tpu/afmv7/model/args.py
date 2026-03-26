@@ -62,16 +62,21 @@ class AFMTextV7ModelArgs(BaseModelArgs):
         head_dims = head_dim * 2
 
         if self.use_lora:
-            nparams_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-            base_nparams = nparams - nparams_trainable
-            # Base model params forward pass (2x) + backwards act grad only (2x) = 4x
-            # LoRA trainable params forward + backward (grad act + grad weight) = 6x
-            param_flops = 4 * (base_nparams - nparams_embedding) + 6 * nparams_trainable
+            # With LoRA, frozen base params skip weight gradient computation.
+            # Frozen layers cost 4× (forward + input grad only); only the
+            # trainable LoRA adapter params incur the full 6× (weight grad too).
+            nparams_trainable = sum(
+                p.numel() for p in model.parameters() if p.requires_grad
+            )
+            nparams_frozen = nparams - nparams_trainable
+            num_flops_per_token = (
+                4 * (nparams_frozen - nparams_embedding)
+                + 6 * nparams_trainable
+                + 6 * self.num_layers * self.num_heads * head_dims * seq_len
+            )
         else:
-            param_flops = 6 * (nparams - nparams_embedding)
-
-        num_flops_per_token = (
-            param_flops
-            + 6 * self.num_layers * self.num_heads * head_dims * seq_len
-        )
+            num_flops_per_token = (
+                6 * (nparams - nparams_embedding)
+                + 6 * self.num_layers * self.num_heads * head_dims * seq_len
+            )
         return nparams, num_flops_per_token

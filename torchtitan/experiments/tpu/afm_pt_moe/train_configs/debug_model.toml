@@ -1,6 +1,6 @@
 [job]
 dump_folder = "./outputs"
-description = "AFMTextV7 debug LoRA training"
+description = "AFM PT MoE debug training"
 print_config = false
 
 [profiling]
@@ -18,8 +18,8 @@ save_tb_folder = "tb"
 enable_wandb = false
 
 [model]
-name = "afmv7_tpu"
-flavor = "debugmodel-lora"
+name = "afm_pt_moe_tpu"
+flavor = "debugmodel"
 # For debug runs, uses the built-in HF test tokenizer (vocab_size=2002).
 # For production, point to a SentencePiece .model file or directory containing one.
 hf_assets_path = "./tests/assets/tokenizer"
@@ -36,7 +36,7 @@ decay_type = "linear"
 min_lr_factor = 0.0
 
 [training]
-local_batch_size = 2
+local_batch_size = 1
 seq_len = 32
 max_norm = 1.0
 steps = 10
@@ -52,12 +52,6 @@ tensor_parallel_degree = 1
 enable_async_tensor_parallel = false
 pipeline_parallel_degree = 1
 context_parallel_degree = 1
-
-[tpu_config]
-use_loss_kernel = true
-use_splash_attention_kernel = true
-use_graph_split = true
-enable_amp = false
 
 [checkpoint]
 enable = false
