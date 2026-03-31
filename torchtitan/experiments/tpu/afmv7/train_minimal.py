@@ -3,7 +3,7 @@ r"""AFMv7 minimal training script using torchtitan infra.
 Example:
   torchrun --nproc_per_node=4 \
     -m torchtitan.experiments.tpu.afmv7.train_minimal \
-    --job.config_file torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b_lora.toml \
+    --job.config_file=torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b_lora.toml \
     --model.name=afmv7_tpu \
     --model.flavor=3B-lora \
     --training.seq_len=8192 \
@@ -198,6 +198,8 @@ def train_step(
     with jax_profiler.TraceAnnotation("bwd"):
       loss.backward()
 
+
+
   with jax_profiler.TraceAnnotation("optimizer.step"):
     optimizer.step()
 
@@ -265,6 +267,7 @@ def start_trainer(job_config: JobConfig) -> None:
       isinstance(job_config, TPUJobConfig)
       and job_config.tpu_config.use_graph_split
   )
+  log_freq = job_config.metrics.log_freq
 
   train_spec = train_spec_module.get_train_spec(job_config.model.name)
 
@@ -301,6 +304,10 @@ def start_trainer(job_config: JobConfig) -> None:
     model._output_mode = OutputMode.HIDDEN
   # else: default OutputMode.LOGITS — forward returns full logit tensor.
 
+  if job_config.training.enable_cpu_offload:
+    logger.info("Materializing model on CPU for CPU offloading")
+    model = model.to_empty(device="cpu")
+
   if world_size > 1:
     train_spec.parallelize_fn(model, parallel_dims, job_config)
 
@@ -318,7 +325,8 @@ def start_trainer(job_config: JobConfig) -> None:
     logger.info("Loss: F.cross_entropy on full logits.")
 
   logger.info("Moving model to device %s", device)
-  model = model.to_empty(device=device)
+  if not job_config.training.enable_cpu_offload:
+    model = model.to_empty(device=device)
   with torch.no_grad():
     model.init_weights()
 
@@ -329,11 +337,26 @@ def start_trainer(job_config: JobConfig) -> None:
       sum(p.numel() for p in trainable_params),
       model_param_count,
   )
+  if job_config.optimizer.implementation == "fused":
+    logger.warning(
+        "Fused optimizer is not supported on TPU, changing to foreach."
+    )
+    job_config.optimizer.implementation = "foreach"
+
+  foreach = job_config.optimizer.implementation == "foreach"
+  fused = job_config.optimizer.implementation == "fused"
+
   optimizer = torch.optim.AdamW(
       trainable_params,
       lr=job_config.optimizer.lr,
       eps=job_config.optimizer.eps,
+      foreach=foreach,
+      fused=fused,
   )
+
+  if job_config.compile.enable and "optimizer" in job_config.compile.components:
+    logger.info("Applying torch.compile to optimizer.step")
+    optimizer.step = torch.compile(optimizer.step)
 
   if torch.distributed.is_initialized():
     torch.distributed.barrier()
@@ -380,6 +403,8 @@ def start_trainer(job_config: JobConfig) -> None:
   prev_time = time.perf_counter()
   total_tokens = 0
   total_time = 0.0
+  accumulated_tokens = 0
+  accumulated_time = 0.0
   warmup_steps = job_config.lr_scheduler.warmup_steps
 
   for step in range(steps):
@@ -397,14 +422,35 @@ def start_trainer(job_config: JobConfig) -> None:
         graph_split=use_graph_split,
     )
 
-    loss_cpu = loss.cpu().item()
+    if (step + 1) % log_freq == 0 or step == steps - 1:
+      loss_cpu = loss.cpu().item()
+      should_log = True
+    else:
+      import torch_tpu._internal.sync  # pylint: disable=g-import-not-at-top
+
+      torch_tpu._internal.sync.synchronize(loss, wait=False)
+      loss_cpu = float("nan")
+      should_log = False
 
     now = time.perf_counter()
     step_time = now - prev_time
     prev_time = now
 
     step_tokens = local_batch_size * seq_len
-    tps = step_tokens / step_time
+
+    accumulated_tokens += step_tokens
+    accumulated_time += step_time
+
+    if should_log:
+      tps = accumulated_tokens / accumulated_time
+      interval_steps = (step % log_freq) + 1
+      avg_step_time = accumulated_time / interval_steps
+      accumulated_tokens = 0
+      accumulated_time = 0.0
+    else:
+      tps = step_tokens / step_time
+      avg_step_time = step_time
+
     tflops = num_flops_per_token * tps / 1e12
     mfu = 100 * num_flops_per_token * tps / peak_flops
 
@@ -412,14 +458,14 @@ def start_trainer(job_config: JobConfig) -> None:
       total_tokens += step_tokens
       total_time += step_time
 
-    if rank == 0:
+    if rank == 0 and should_log:
       logger.info(
-          "Step %d/%d | Loss: %.4f | Step time: %.2f s | TPS: %.0f | TFlops:"
-          " %.2f | MFU: %.2f%%",
+          "Step %d/%d | Loss: %.4f | Avg Step time: %.2f s | TPS: %.0f |"
+          " TFlops: %.2f | MFU: %.2f%%",
           step + 1,
           steps,
-          loss_cpu,
-          step_time,
+          loss_cpu / step_tokens,
+          avg_step_time,
           tps,
           tflops,
           mfu,
