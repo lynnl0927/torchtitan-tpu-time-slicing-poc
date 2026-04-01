@@ -1,16 +1,12 @@
 r"""AFMv7 minimal training script using torchtitan infra.
 
-Example:
+Example with v6e-4 vm (yeild ~6.9k TPS / chip):
+  export LIBTPU_INIT_ARGS='--xla_tpu_scoped_vmem_limit_kib=98304' && \
   torchrun --nproc_per_node=4 \
-    -m torchtitan.experiments.tpu.afmv7.train_minimal \
-    --job.config_file=torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b_lora.toml \
-    --model.name=afmv7_tpu \
-    --model.flavor=3B-lora \
-    --training.seq_len=8192 \
-    --training.local_batch_size=4 \
-    --training.steps=10 \
-    --tpu_config.[no-]use_splash_attention_kernel \
-    --tpu_config.[no-]use_loss_kernel
+  -m torchtitan.experiments.tpu.afmv7.train_minimal \
+  --job.config_file=torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b_lora.toml \
+  --model.name=afmv7_tpu \
+  --model.flavor=3B-lora
 """
 
 import os
@@ -226,6 +222,8 @@ def start_trainer(job_config: JobConfig) -> None:
         enable_cpu_backend=job_config.training.enable_cpu_offload,
         base_folder=job_config.job.dump_folder,
     )
+    # Force all ranks to flush pending device-init XLA ops
+    torch.distributed.barrier()
 
   parallel_dims = ParallelDims(
       dp_shard=job_config.parallelism.data_parallel_shard_degree,
@@ -239,15 +237,22 @@ def start_trainer(job_config: JobConfig) -> None:
   )
   logger.info("parallel_dims: %s", parallel_dims)
 
-  if world_size > 1:
-    logger.info("world_mesh: %s", parallel_dims.world_mesh)
-    torch.distributed.barrier()
-    dist_utils.set_determinism(
-        parallel_dims,
-        device,
-        job_config.debug,
-        distinct_seed_mesh_dims=["pp"],
-    )
+  seed = job_config.debug.seed or 42
+  torch.manual_seed(seed)
+  logger.info(
+      "Set manual seed to %d on all ranks (workaround for set_determinism"
+      " hang)",
+      seed,
+  )
+  # TODO b/498659628: Re-enable set_determinism once the hang is fixed.
+  # if world_size > 1:
+  #   logger.info("world_mesh: %s", parallel_dims.world_mesh)
+  #   dist_utils.set_determinism(
+  #       parallel_dims,
+  #       device,
+  #       job_config.debug,
+  #       distinct_seed_mesh_dims=["pp"],
+  #   )
 
   use_loss_kernel = (
       isinstance(job_config, TPUJobConfig)
@@ -366,14 +371,6 @@ def start_trainer(job_config: JobConfig) -> None:
   seq_len = job_config.training.seq_len
   vocab_size = model_args.vocab_size  # pytype: disable=attribute-error
 
-  profile_dir = os.path.join(
-      job_config.job.dump_folder, "profile_trace", f"rank_{rank}"
-  )
-  profile_start_step = getattr(job_config.profiling, "profiler_warmup", 7)
-  profile_end_step = profile_start_step + getattr(
-      job_config.profiling, "profiler_active", 2
-  )
-
   # Fixed dummy input — same tokens every step (matches scratchpad behaviour).
   tokens = torch.randint(
       0, vocab_size, (local_batch_size, seq_len), device=device
@@ -407,69 +404,73 @@ def start_trainer(job_config: JobConfig) -> None:
   accumulated_time = 0.0
   warmup_steps = job_config.lr_scheduler.warmup_steps
 
-  for step in range(steps):
-    if job_config.profiling.enable_profiling and step == profile_start_step:
-      logger.info("Starting JAX trace → %s", profile_dir)
-      jax_profiler.start_trace(profile_dir, create_perfetto_link=False)
+  from torchtitan.experiments.tpu import jax_profiling
+  maybe_enable_profiling = jax_profiling.maybe_enable_profiling
 
-    if job_config.profiling.enable_profiling and step == profile_end_step:
-      jax_profiler.stop_trace()
-
-    loss = train_step(
-        model, tokens, optimizer, loss_fn,
-        use_pallas=use_loss_kernel,
-        use_chunked_loss=use_chunked_loss,
-        graph_split=use_graph_split,
-    )
-
-    if (step + 1) % log_freq == 0 or step == steps - 1:
-      loss_cpu = loss.cpu().item()
-      should_log = True
-    else:
-      import torch_tpu._internal.sync  # pylint: disable=g-import-not-at-top
-
-      torch_tpu._internal.sync.synchronize(loss, wait=False)
-      loss_cpu = float("nan")
-      should_log = False
-
-    now = time.perf_counter()
-    step_time = now - prev_time
-    prev_time = now
-
-    step_tokens = local_batch_size * seq_len
-
-    accumulated_tokens += step_tokens
-    accumulated_time += step_time
-
-    if should_log:
-      tps = accumulated_tokens / accumulated_time
-      interval_steps = (step % log_freq) + 1
-      avg_step_time = accumulated_time / interval_steps
-      accumulated_tokens = 0
-      accumulated_time = 0.0
-    else:
-      tps = step_tokens / step_time
-      avg_step_time = step_time
-
-    tflops = num_flops_per_token * tps / 1e12
-    mfu = 100 * num_flops_per_token * tps / peak_flops
-
-    if step >= warmup_steps:
-      total_tokens += step_tokens
-      total_time += step_time
-
-    if rank == 0 and should_log:
-      logger.info(
-          "Step %d/%d | Loss: %.4f | Avg Step time: %.2f s | TPS: %.0f |"
-          " TFlops: %.2f | MFU: %.2f%%",
-          step + 1,
-          steps,
-          loss_cpu / step_tokens,
-          avg_step_time,
-          tps,
-          tflops,
-          mfu,
+  with maybe_enable_profiling(
+      job_config.profiling,
+      global_step=0,
+      base_folder=job_config.job.dump_folder,
+  ) as profiler:
+    for step in range(steps):
+      loss = train_step(
+          model, tokens, optimizer, loss_fn,
+          use_pallas=use_loss_kernel,
+          use_chunked_loss=use_chunked_loss,
+          graph_split=use_graph_split,
       )
+
+      if (step + 1) % log_freq == 0 or step == steps - 1:
+        loss_cpu = loss.cpu().item()
+        should_log = True
+      else:
+        import torch_tpu._internal.sync  # pylint: disable=g-import-not-at-top
+
+        torch_tpu._internal.sync.synchronize(loss, wait=False)
+        loss_cpu = float("nan")
+        should_log = False
+
+      now = time.perf_counter()
+      step_time = now - prev_time
+      prev_time = now
+
+      step_tokens = local_batch_size * seq_len
+
+      accumulated_tokens += step_tokens
+      accumulated_time += step_time
+
+      if should_log:
+        tps = accumulated_tokens / accumulated_time
+        interval_steps = (step % log_freq) + 1
+        avg_step_time = accumulated_time / interval_steps
+        accumulated_tokens = 0
+        accumulated_time = 0.0
+      else:
+        tps = step_tokens / step_time
+        avg_step_time = step_time
+
+      tflops = num_flops_per_token * tps / 1e12
+      mfu = 100 * num_flops_per_token * tps / peak_flops
+
+      if step >= warmup_steps:
+        total_tokens += step_tokens
+        total_time += step_time
+
+      if rank == 0 and should_log:
+        logger.info(
+            "Step %d/%d | Loss: %.4f | Avg Step time: %.2f s | TPS: %.0f |"
+            " TFlops: %.2f | MFU: %.2f%%",
+            step + 1,
+            steps,
+            loss_cpu / step_tokens,
+            avg_step_time,
+            tps,
+            tflops,
+            mfu,
+        )
+
+      if profiler:
+        profiler.step()
 
   avg_tps = total_tokens / total_time if total_time > 0 else 0.0
   avg_tflops = num_flops_per_token * avg_tps / 1e12

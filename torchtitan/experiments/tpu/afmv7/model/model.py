@@ -112,7 +112,14 @@ class AFMTextV7Wrapper(ModelProtocol):
         which causes activation explosion and NaN loss when training with FSDP.
         """
         with torch.no_grad():
-            for param in self.model.parameters():
-                param.uniform_(-0.01, 0.01)
+            for name, param in self.model.named_parameters():
+                local_tensor = param.to_local() if hasattr(param, "to_local") else param
+                if "lora" in name:
+                    if "lora_B" in name:
+                        local_tensor.zero_()
+                    else:
+                        local_tensor.uniform_(-0.01, 0.01)
+                else:
+                    local_tensor.uniform_(-0.01, 0.01)
             for buffer in self.model.buffers():
                 buffer.fill_(0)

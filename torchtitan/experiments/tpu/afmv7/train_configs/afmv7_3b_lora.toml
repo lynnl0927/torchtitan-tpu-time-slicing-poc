@@ -28,6 +28,7 @@ hf_assets_path = "./tests/assets/tokenizer"
 name = "AdamW"
 lr = 3e-4
 eps = 1e-8
+implementation = "foreach"
 
 [lr_scheduler]
 warmup_steps = 10
