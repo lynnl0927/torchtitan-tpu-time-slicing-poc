@@ -70,6 +70,7 @@ sa_block_kv_dkv_compute = 2048
 sa_block_q_dq = 2048
 sa_block_kv_dq = 2048
 compile_mode = "whole"
+enable_manual_ddp = false
 
 [checkpoint]
 enable = false

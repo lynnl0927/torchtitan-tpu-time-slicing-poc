@@ -1,7 +1,7 @@
 r"""AFMv7 minimal training script using torchtitan infra.
 
-Example with v6e-4 vm (yeild ~6.9k TPS / chip):
-  export LIBTPU_INIT_ARGS='--xla_tpu_scoped_vmem_limit_kib=98304' && \
+Example with v6e-4 vm (yeild ~7.1k TPS / chip):
+  export LIBTPU_INIT_ARGS='--xla_tpu_scoped_vmem_limit_kib=131072' && \
   torchrun --nproc_per_node=4 \
   -m torchtitan.experiments.tpu.afmv7.train_minimal \
   --job.config_file=torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b_lora.toml \
@@ -112,6 +112,7 @@ def train_step(
     use_pallas: bool = False,
     use_chunked_loss: bool = False,
     graph_split: bool = False,
+    manual_ddp: bool = False,
 ) -> torch.Tensor:
   """Single training step.
 
@@ -194,7 +195,13 @@ def train_step(
     with jax_profiler.TraceAnnotation("bwd"):
       loss.backward()
 
-
+  if manual_ddp:
+    with jax_profiler.TraceAnnotation("all_reduce"):
+      for p in model.parameters():
+        if p.requires_grad and p.grad is not None:
+          torch.distributed.all_reduce(
+              p.grad, op=torch.distributed.ReduceOp.AVG
+          )
 
   with jax_profiler.TraceAnnotation("optimizer.step"):
     optimizer.step()
@@ -225,9 +232,19 @@ def start_trainer(job_config: JobConfig) -> None:
     # Force all ranks to flush pending device-init XLA ops
     torch.distributed.barrier()
 
+  dp_replicate = job_config.parallelism.data_parallel_replicate_degree
+  dp_shard = job_config.parallelism.data_parallel_shard_degree
+
+  if dp_replicate == -1:
+    dp_shard = 1  # For full DDP, we don't want sharding
+    cp = job_config.parallelism.context_parallel_degree
+    tp = job_config.parallelism.tensor_parallel_degree
+    pp = job_config.parallelism.pipeline_parallel_degree
+    dp_replicate = world_size // (dp_shard * cp * tp * pp)
+
   parallel_dims = ParallelDims(
-      dp_shard=job_config.parallelism.data_parallel_shard_degree,
-      dp_replicate=job_config.parallelism.data_parallel_replicate_degree,
+      dp_shard=dp_shard,
+      dp_replicate=dp_replicate,
       cp=job_config.parallelism.context_parallel_degree,
       tp=job_config.parallelism.tensor_parallel_degree,
       pp=job_config.parallelism.pipeline_parallel_degree,
@@ -268,6 +285,15 @@ def start_trainer(job_config: JobConfig) -> None:
         "Pass --tpu_config.no-use_loss_kernel to disable the Pallas kernel "
         "when using --tpu_config.use_chunked_loss."
     )
+  is_manual_ddp = (
+      parallel_dims.dp_replicate_enabled
+      and not parallel_dims.fsdp_enabled
+      and isinstance(job_config, TPUJobConfig)
+      and job_config.tpu_config.enable_manual_ddp
+  )
+  if is_manual_ddp:
+    logger.info("Enabling manual DDP all-reduce in training loop")
+
   use_graph_split = (
       isinstance(job_config, TPUJobConfig)
       and job_config.tpu_config.use_graph_split
@@ -414,10 +440,14 @@ def start_trainer(job_config: JobConfig) -> None:
   ) as profiler:
     for step in range(steps):
       loss = train_step(
-          model, tokens, optimizer, loss_fn,
+          model,
+          tokens,
+          optimizer,
+          loss_fn,
           use_pallas=use_loss_kernel,
           use_chunked_loss=use_chunked_loss,
           graph_split=use_graph_split,
+          manual_ddp=is_manual_ddp,
       )
 
       if (step + 1) % log_freq == 0 or step == steps - 1:

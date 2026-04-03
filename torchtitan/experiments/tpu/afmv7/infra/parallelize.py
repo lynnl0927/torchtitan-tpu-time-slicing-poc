@@ -180,16 +180,13 @@ def parallelize_afmv7(
     if use_simple_fsdp:
       raise RuntimeError("Simple FSDP does not support dp_replicate without fsdp enabled")
 
-    if not enable_amp:
-      if parallel_dims.world_size != dp_replicate_mesh.size():
-        raise RuntimeError("DDP has not supported > 1D parallelism")
-      apply_ddp(
-          model,
-          dp_replicate_mesh,
-          enable_compile=model_compile_enabled,
-      )
-    else:
-      # TODO b/494360665: remove this once torch.autocast is suppoted
+    if parallel_dims.world_size != dp_replicate_mesh.size():
+      raise RuntimeError("DDP has not supported > 1D parallelism")
+
+    if job_config.tpu_config.enable_manual_ddp:
+      logger.info("Skipping FSDP/DDP wrapping for manual All-Reduce DDP")
+    elif enable_amp:
+      # TODO b/494360665: remove this once torch.autocast is supported
       apply_fsdp(
           model,
           dp_mesh=dp_replicate_mesh,
@@ -203,8 +200,18 @@ def parallelize_afmv7(
           reshard_after_forward_policy=job_config.parallelism.fsdp_reshard_after_forward,
           pp_enabled=parallel_dims.pp_enabled,
           keep_output_weight_gathered=(
-              model_output_mode== OutputMode.HIDDEN_AND_WEIGHT),
+              model_output_mode == OutputMode.HIDDEN_AND_WEIGHT
+          ),
           enable_amp=enable_amp,
+      )
+      logger.info(
+          "Applied FSDP to the model for replication mode because of AMP"
+      )
+    else:
+      apply_ddp(
+          model,
+          dp_replicate_mesh,
+          enable_compile=model_compile_enabled,
       )
 
   model.lora_params = lora_params
