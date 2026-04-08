@@ -21,6 +21,7 @@ import torchtitan.config
 import torchtitan.distributed
 from torchtitan.distributed import utils as dist_utils
 from torchtitan.experiments.tpu import gmain
+from torchtitan.experiments.tpu import model_annotator
 from torchtitan.experiments.tpu import utils as tpu_utils
 import torchtitan.experiments.tpu.afmv7  # trigger afmv7_tpu model registration
 from torchtitan.experiments.tpu.loss import build_cross_entropy_loss
@@ -158,24 +159,19 @@ def train_step(
   if use_chunked_loss:
     # Inner model reshards all params after forward; only all-gather the
     # output_transform weight (~628 MB) as a plain tensor before the chunk loop.
-    with jax_profiler.TraceAnnotation("fwd"):
-      hidden, _ = model(tokens)  # hidden: (B, S, H)
+    hidden, _ = model(tokens)  # hidden: (B, S, H)
     w = model.model.output_transform.weight
     w_plain = (
-        w.full_tensor().detach()
-        if hasattr(w, "full_tensor")
-        else w.detach()
+        w.full_tensor().detach() if hasattr(w, "full_tensor") else w.detach()
     )
     with jax_profiler.TraceAnnotation("chunked_loss"):
       loss, hidden_grad = loss_fn(hidden, targets, w_plain.t())
     if graph_split:
       torch_tpu._internal.sync.synchronize(hidden_grad, wait=False)
-    with jax_profiler.TraceAnnotation("bwd"):
-      hidden.backward(hidden_grad)
+    hidden.backward(hidden_grad)
   else:
     if use_pallas:
-      with jax_profiler.TraceAnnotation("fwd"):
-        hidden, output_weight_t = model(tokens)
+      hidden, output_weight_t = model(tokens)
       # hidden: (B, S, H)
       # output_weight_t: (H, vocab_size) — gathered tensor kept valid by FSDP
       # (reshard_after_forward=False on inner module).
@@ -183,17 +179,16 @@ def train_step(
         loss = loss_fn((hidden, output_weight_t), targets)  # pytype: disable=missing-parameter
     else:
       # Standard logits path: forward returns (B, S, vocab_size) logits.
-      with jax_profiler.TraceAnnotation("fwd"):
-        logits = model(tokens)
+      logits = model(tokens)
       with jax_profiler.TraceAnnotation("loss"):
         loss = F.cross_entropy(
-            logits.reshape(-1, logits.shape[-1]), targets.reshape(-1),
+            logits.reshape(-1, logits.shape[-1]),
+            targets.reshape(-1),
             reduction="sum",
         )
     if graph_split:
       torch_tpu._internal.sync.synchronize(loss, wait=False)
-    with jax_profiler.TraceAnnotation("bwd"):
-      loss.backward()
+    loss.backward()
 
   if manual_ddp:
     with jax_profiler.TraceAnnotation("all_reduce"):
@@ -202,7 +197,6 @@ def train_step(
           torch.distributed.all_reduce(
               p.grad, op=torch.distributed.ReduceOp.AVG
           )
-
   with jax_profiler.TraceAnnotation("optimizer.step"):
     optimizer.step()
 
@@ -345,7 +339,8 @@ def start_trainer(job_config: JobConfig) -> None:
   if use_loss_kernel:
     loss_fn = build_cross_entropy_loss(job_config)
     logger.info(
-        "Loss: pallas_cross_entropy_loss (fused linear+CE Pallas kernel)")
+        "Loss: pallas_cross_entropy_loss (fused linear+CE Pallas kernel)"
+    )
   elif use_chunked_loss:
     loss_fn = partitioned_linear_softmax_cross_entropy_loss
     logger.info(
@@ -360,6 +355,8 @@ def start_trainer(job_config: JobConfig) -> None:
     model = model.to_empty(device=device)
   with torch.no_grad():
     model.init_weights()
+
+  model_annotator.wrap_model(model)
 
   # Build optimizer over trainable (adapter) params only.
   trainable_params = [p for p in model.parameters() if p.requires_grad]
@@ -423,14 +420,16 @@ def start_trainer(job_config: JobConfig) -> None:
       peak_flops,
   )
 
-  prev_time = time.perf_counter()
   total_tokens = 0
   total_time = 0.0
   accumulated_tokens = 0
   accumulated_time = 0.0
+  accumulated_steps = 0
   warmup_steps = job_config.lr_scheduler.warmup_steps
+  previous_step_was_profiling = False
 
   from torchtitan.experiments.tpu import jax_profiling
+
   maybe_enable_profiling = jax_profiling.maybe_enable_profiling
 
   with maybe_enable_profiling(
@@ -439,19 +438,22 @@ def start_trainer(job_config: JobConfig) -> None:
       base_folder=job_config.job.dump_folder,
   ) as profiler:
     for step in range(steps):
-      loss = train_step(
-          model,
-          tokens,
-          optimizer,
-          loss_fn,
-          use_pallas=use_loss_kernel,
-          use_chunked_loss=use_chunked_loss,
-          graph_split=use_graph_split,
-          manual_ddp=is_manual_ddp,
-      )
+      step_start = time.perf_counter()
+      with jax_profiler.TraceAnnotation("train", step_num=step):
+        loss = train_step(
+            model,
+            tokens,
+            optimizer,
+            loss_fn,
+            use_pallas=use_loss_kernel,
+            use_chunked_loss=use_chunked_loss,
+            graph_split=use_graph_split,
+            manual_ddp=is_manual_ddp,
+        )
 
-      if (step + 1) % log_freq == 0 or step == steps - 1:
-        loss_cpu = loss.cpu().item()
+      if (step + 1) % log_freq == 0 or step == (steps - 1):
+        with jax_profiler.TraceAnnotation("D2H", step_num=step):
+          loss_cpu = loss.cpu().item()
         should_log = True
       else:
         import torch_tpu._internal.sync  # pylint: disable=g-import-not-at-top
@@ -460,44 +462,52 @@ def start_trainer(job_config: JobConfig) -> None:
         loss_cpu = float("nan")
         should_log = False
 
-      now = time.perf_counter()
-      step_time = now - prev_time
-      prev_time = now
-
+      step_end = time.perf_counter()
+      step_time = step_end - step_start
       step_tokens = local_batch_size * seq_len
 
-      accumulated_tokens += step_tokens
-      accumulated_time += step_time
+      # Ignore profiling steps for MFU calculation.
+      if (profiler and not profiler.is_tracing()) or not profiler:
+        # If the previous step was profiling, we expect a slow step, so don't
+        # accumulate time or tokens.
+        if not previous_step_was_profiling:
+          accumulated_tokens += step_tokens
+          accumulated_time += step_time
+          accumulated_steps += 1
 
-      if should_log:
-        tps = accumulated_tokens / accumulated_time
-        interval_steps = (step % log_freq) + 1
-        avg_step_time = accumulated_time / interval_steps
-        accumulated_tokens = 0
-        accumulated_time = 0.0
-      else:
-        tps = step_tokens / step_time
-        avg_step_time = step_time
+          if should_log:
+            tps = accumulated_tokens / accumulated_time
+            avg_step_time = accumulated_time / accumulated_steps
+            accumulated_tokens = 0
+            accumulated_time = 0.0
+            accumulated_steps = 0
+          else:
+            tps = step_tokens / step_time
+            avg_step_time = step_time
 
-      tflops = num_flops_per_token * tps / 1e12
-      mfu = 100 * num_flops_per_token * tps / peak_flops
+          tflops = num_flops_per_token * tps / 1e12
+          mfu = 100 * num_flops_per_token * tps / peak_flops
 
-      if step >= warmup_steps:
-        total_tokens += step_tokens
-        total_time += step_time
+          if step >= warmup_steps:
+            total_tokens += step_tokens
+            total_time += step_time
 
-      if rank == 0 and should_log:
-        logger.info(
-            "Step %d/%d | Loss: %.4f | Avg Step time: %.2f s | TPS: %.0f |"
-            " TFlops: %.2f | MFU: %.2f%%",
-            step + 1,
-            steps,
-            loss_cpu / step_tokens,
-            avg_step_time,
-            tps,
-            tflops,
-            mfu,
-        )
+          if rank == 0 and should_log:
+            logger.info(
+                "Step %d/%d | Loss: %.4f | Avg Step time: %.2f s | TPS: %.0f |"
+                " TFlops: %.2f | MFU: %.2f%%",
+                step + 1,
+                steps,
+                loss_cpu / step_tokens,
+                avg_step_time,
+                tps,
+                tflops,
+                mfu,
+            )
+        else:
+          previous_step_was_profiling = False
+      elif profiler and profiler.is_tracing():
+        previous_step_was_profiling = True
 
       if profiler:
         profiler.step()

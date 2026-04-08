@@ -1,9 +1,10 @@
 """Utilities for configuring torch_tpu for TAP/Borg distributed tests."""
 
 import os
-import portpicker
-from torch_tpu._internal.distributed import tpu_topology
+
 from absl import logging
+import portpicker
+from torch_tpu._internal.utils import hardware
 
 
 def maybe_init_distributed(num_devices: int) -> bool:
@@ -49,7 +50,8 @@ def maybe_init_distributed(num_devices: int) -> bool:
     )
 
   # Set Global Topology
-  topo, found_devices = tpu_topology.get_tpu_topology()
+  topo = hardware.get_tpu_topology()
+  found_devices = hardware.get_tpu_device_count()
   if found_devices != num_devices:
     raise RuntimeError(
         f"borg_distributed_utils detected {found_devices} TPU devices, but"

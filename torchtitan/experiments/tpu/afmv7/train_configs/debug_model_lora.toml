@@ -58,6 +58,7 @@ use_loss_kernel = true
 use_splash_attention_kernel = true
 use_graph_split = true
 enable_amp = false
+use_lora = true
 
 [checkpoint]
 enable = false

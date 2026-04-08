@@ -323,7 +323,9 @@ def apply_compile(
       )
       inner.layers.register_module(seg_id, compiled)
   else:
-    logger.info("Applying torch.compile to AFMTextV7 TransformerLayers (Layer-level).")
+    logger.info(
+        "Applying torch.compile to AFMTextV7 TransformerLayers (Layer-level)."
+    )
     for seg in (inner.layers.segment_0, inner.layers.segment_1):
       for layer_id, layer in seg.named_children():
         compiled = torch.compile(
@@ -391,13 +393,20 @@ def apply_fsdp(
       )
 
   inner = model.model  # the TAMM AFMTextV7 module
+  use_segments = hasattr(inner.layers, "segment_0")
 
   # Shard each individual TransformerLayer inside both segments for
   # fine-grained memory and compute overlap.
-  for layer in inner.layers.segment_0.children():
-    fully_shard(layer, **fsdp_config, reshard_after_forward=reshard)
-  for layer in inner.layers.segment_1.children():
-    fully_shard(layer, **fsdp_config, reshard_after_forward=reshard)
+  if use_segments:
+    logger.info("Sharding segments individually (FSDP).")
+    for layer in inner.layers.segment_0.children():
+      fully_shard(layer, **fsdp_config, reshard_after_forward=reshard)
+    for layer in inner.layers.segment_1.children():
+      fully_shard(layer, **fsdp_config, reshard_after_forward=reshard)
+  else:
+    logger.info("No segments found, sharding layers (FSDP).")
+    for layer in inner.layers.children():
+      fully_shard(layer, **fsdp_config, reshard_after_forward=reshard)
 
   # Shard the full TAMM model (handles embedding, norm, positional_encoding,
   # and the TiedWeightLinear output_transform which shares weights with the
@@ -422,10 +431,10 @@ def apply_ddp(
     dp_mesh: DeviceMesh,
     enable_compile: bool,
 ):
-    if enable_compile:
-        torch._dynamo.config.optimize_ddp = "ddp_optimizer"
+  if enable_compile:
+    torch._dynamo.config.optimize_ddp = "ddp_optimizer"
 
-    # pyrefly: ignore [invalid-param-spec]
-    replicate(model, device_mesh=dp_mesh, bucket_cap_mb=100)
+  # pyrefly: ignore [invalid-param-spec]
+  replicate(model, device_mesh=dp_mesh, bucket_cap_mb=100)
 
-    logger.info("Applied DDP to the model")
+  logger.info("Applied DDP to the model")

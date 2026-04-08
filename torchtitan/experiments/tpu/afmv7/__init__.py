@@ -31,6 +31,17 @@ afmv7_args = {
         hidden_dim_scale_factor=3.25,
         rope_theta=500000.0,
     ),
+    # 3B model with 50k vocabulary size.
+    "3B-50k": AFMTextV7ModelArgs(
+        vocab_size=49152,
+        hidden_dim=3072,
+        num_layers=26,
+        num_kv_reuse_layers=0,
+        num_heads=24,
+        num_kv_heads=8,
+        hidden_dim_scale_factor=3.25,
+        rope_theta=500000.0,
+    ),
     # Tiny model for local debugging without a TPU.
     # vocab_size matches the test tokenizer at tests/assets/tokenizer.
     "debugmodel": AFMTextV7ModelArgs(
@@ -69,7 +80,7 @@ afmv7_args = {
         hidden_dim_scale_factor=3.25,
         rope_theta=500000.0,
         use_lora=True,
-        lora_rank=16,
+        lora_rank=32,
         lora_alpha=16.0,
         lora_dtype="bfloat16",
     ),

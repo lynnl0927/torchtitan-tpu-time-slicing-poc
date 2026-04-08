@@ -71,6 +71,7 @@ sa_block_q_dq = 2048
 sa_block_kv_dq = 2048
 compile_mode = "whole"
 enable_manual_ddp = false
+use_lora = true
 
 [checkpoint]
 enable = false
@@ -85,6 +86,7 @@ mode = "full"  # uses TAMM's checkpoint_activations() on both segments
 
 [compile]
 enable = true
+backend = "tpu"
 components = ["model", "loss"]
 
 [validation]
