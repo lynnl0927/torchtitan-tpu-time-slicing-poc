@@ -15,7 +15,7 @@ import torchtitan.protocols.train_spec as train_spec_module
 import torchtitan.distributed
 from torchtitan.experiments.tpu.tpu_job_config import TPUJobConfig
 
-from google3.pyglib.contrib.g3_multiprocessing import g3_multiprocessing
+
 
 TEST_BATCH_SIZE = 8
 TEST_SEQ_LEN = 128
@@ -90,4 +90,4 @@ class AFMv7DTensorParallelizeTest(
 
 
 if __name__ == "__main__":
-    g3_multiprocessing.handle_test_main(absltest.main)
+    absltest.main()

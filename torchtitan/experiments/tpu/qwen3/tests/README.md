@@ -3,7 +3,7 @@
 Here is an example invocation of running Qwen3 tests on all devices:
 
 ```
-blaze test -c opt --config=cuda //third_party/py/torchtitan/experiments/tpu/qwen3/tests:test_qwen3_all
+blaze test -c opt --config=cuda //torchtitan/experiments/tpu/qwen3/tests:test_qwen3_all
 ```
 
 Notes:
@@ -34,6 +34,6 @@ The following test targets are available:
 - TPU: `test_qwen3_tpu_vl` (runs on a 1x1 viperlite TPU)
 
   Specify `tpu_{tpu_name}` after the test name. Check
-  `third_party/py/torchtitan/experiments/tpu/py3.bzl` for available TPUs.
+  `torchtitan/experiments/tpu/py3.bzl` for available TPUs.
 
 - CPU: `test_qwen3`

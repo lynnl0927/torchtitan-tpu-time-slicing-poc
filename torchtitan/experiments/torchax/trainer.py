@@ -126,7 +126,7 @@ class TorchaxTrainer:
     """Sets up the model."""
 
     # TODO(jialeic): Can we do something like
-    # https://source.corp.google.com/piper///depot/google3/third_party/py/torchtitan/experiments/tpu/train_minimal.py;l=182-188
+    # https://source.corp.google.com/piper///depot/google3/torchtitan/experiments/tpu/train_minimal.py;l=182-188
 
     if job_config.model.name == 'llama3':
       torchax_model = torchax_llama3
@@ -403,10 +403,10 @@ class TorchaxTrainer:
       # `moe___experts` so we need to use a different naming convention to
       # extract the nparams
       if job_config.model.name == 'qwen3':
-        # https://source.corp.google.com/piper///depot/google3/third_party/py/torchtitan/experiments/tpu/qwen3/model/args.py;l=65
+        # https://source.corp.google.com/piper///depot/google3/torchtitan/experiments/tpu/qwen3/model/args.py;l=65
         head_dims = 2 * self.model_args.head_dim  # pytype: disable=attribute-error
       elif job_config.model.name == 'deepseek_v3':
-        # https://source.corp.google.com/piper///depot/google3/third_party/py/torchtitan/experiments/tpu/deepseek_v3/model/args.py;l=119
+        # https://source.corp.google.com/piper///depot/google3/torchtitan/experiments/tpu/deepseek_v3/model/args.py;l=119
         head_dims = (
             self.model_args.qk_nope_head_dim  # pytype: disable=attribute-error
             + self.model_args.qk_rope_head_dim  # pytype: disable=attribute-error

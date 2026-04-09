@@ -112,7 +112,7 @@ def make_unpermute_runner(mesh, top_k):
 # `moe___experts` so we need to use a different naming convention to
 # extract the nparams
 # see orginal function in
-# https://source.corp.google.com/piper///depot/google3/third_party/py/torchtitan/models/utils.py;l=436-446
+# https://source.corp.google.com/piper///depot/google3/torchtitan/models/utils.py;l=436-446
 def get_moe_model_nparams_and_flops(
     model_args: Any,
     model: nn.Module,

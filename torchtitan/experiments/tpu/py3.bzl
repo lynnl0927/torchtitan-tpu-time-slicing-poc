@@ -10,7 +10,7 @@ The number of GPU/TPU devices on Forge is limited. If your tests takes very long
 check the queues states on go/forge-for-ml and consider switching accelerators.
 
 Example
-load("//third_party/py/torchtitan/experiments/tpu:py3.bzl", "py3_library", "py3_test")
+load("//torchtitan/experiments/tpu:py3.bzl", "py3_library", "py3_test")
 # Define a library with struct dependency and pytype checks.
 py3_library(name="my_library", ...)
 

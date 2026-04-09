@@ -3,7 +3,7 @@
 Here is an example invocation of running llama3 tests on all devices:
 
 ```
-blaze test -c opt --config=cuda //third_party/py/torchtitan/experiments/tpu/llama3/tests:test_llama3_all
+blaze test -c opt --config=cuda //torchtitan/experiments/tpu/llama3/tests:test_llama3_all
 ```
 
 Notes:
@@ -36,6 +36,6 @@ The following test targets are available to test a single backend:
 - TPU: `test_llama3_tpu_vl` (runs on a 1x1 viperlite TPU)
   
   Specify `tpu_{tpu_name}` after the test name. Check
-  `third_party/py/torchtitan/experiments/tpu/py3.bzl` for available TPUs.
+  `torchtitan/experiments/tpu/py3.bzl` for available TPUs.
 
 - CPU: `test_llama3`
