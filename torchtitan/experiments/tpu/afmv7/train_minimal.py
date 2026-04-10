@@ -426,7 +426,6 @@ def start_trainer(job_config: JobConfig) -> None:
   accumulated_time = 0.0
   accumulated_steps = 0
   warmup_steps = job_config.lr_scheduler.warmup_steps
-  previous_step_was_profiling = False
 
   from torchtitan.experiments.tpu import jax_profiling
 
@@ -466,48 +465,39 @@ def start_trainer(job_config: JobConfig) -> None:
       step_time = step_end - step_start
       step_tokens = local_batch_size * seq_len
 
-      # Ignore profiling steps for MFU calculation.
-      if (profiler and not profiler.is_tracing()) or not profiler:
-        # If the previous step was profiling, we expect a slow step, so don't
-        # accumulate time or tokens.
-        if not previous_step_was_profiling:
-          accumulated_tokens += step_tokens
-          accumulated_time += step_time
-          accumulated_steps += 1
+      accumulated_tokens += step_tokens
+      accumulated_time += step_time
+      accumulated_steps += 1
 
-          if should_log:
-            tps = accumulated_tokens / accumulated_time
-            avg_step_time = accumulated_time / accumulated_steps
-            accumulated_tokens = 0
-            accumulated_time = 0.0
-            accumulated_steps = 0
-          else:
-            tps = step_tokens / step_time
-            avg_step_time = step_time
+      if should_log:
+        tps = accumulated_tokens / accumulated_time
+        avg_step_time = accumulated_time / accumulated_steps
+        accumulated_tokens = 0
+        accumulated_time = 0.0
+        accumulated_steps = 0
+      else:
+        tps = step_tokens / step_time
+        avg_step_time = step_time
 
-          tflops = num_flops_per_token * tps / 1e12
-          mfu = 100 * num_flops_per_token * tps / peak_flops
+      tflops = num_flops_per_token * tps / 1e12
+      mfu = 100 * num_flops_per_token * tps / peak_flops
 
-          if step >= warmup_steps:
-            total_tokens += step_tokens
-            total_time += step_time
+      if step >= warmup_steps:
+        total_tokens += step_tokens
+        total_time += step_time
 
-          if rank == 0 and should_log:
-            logger.info(
-                "Step %d/%d | Loss: %.4f | Avg Step time: %.2f s | TPS: %.0f |"
-                " TFlops: %.2f | MFU: %.2f%%",
-                step + 1,
-                steps,
-                loss_cpu / step_tokens,
-                avg_step_time,
-                tps,
-                tflops,
-                mfu,
-            )
-        else:
-          previous_step_was_profiling = False
-      elif profiler and profiler.is_tracing():
-        previous_step_was_profiling = True
+      if rank == 0 and should_log:
+        logger.info(
+            "Step %d/%d | Loss: %.4f | Avg Step time: %.2f s | TPS: %.0f |"
+            " TFlops: %.2f | MFU: %.2f%%",
+            step + 1,
+            steps,
+            loss_cpu / step_tokens,
+            avg_step_time,
+            tps,
+            tflops,
+            mfu,
+        )
 
       if profiler:
         profiler.step()
