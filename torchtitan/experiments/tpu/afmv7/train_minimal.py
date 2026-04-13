@@ -461,6 +461,9 @@ def start_trainer(job_config: JobConfig) -> None:
         loss_cpu = float("nan")
         should_log = False
 
+      if profiler:
+        profiler.step()
+
       step_end = time.perf_counter()
       step_time = step_end - step_start
       step_tokens = local_batch_size * seq_len
@@ -498,9 +501,6 @@ def start_trainer(job_config: JobConfig) -> None:
             tflops,
             mfu,
         )
-
-      if profiler:
-        profiler.step()
 
   avg_tps = total_tokens / total_time if total_time > 0 else 0.0
   avg_tflops = num_flops_per_token * avg_tps / 1e12
