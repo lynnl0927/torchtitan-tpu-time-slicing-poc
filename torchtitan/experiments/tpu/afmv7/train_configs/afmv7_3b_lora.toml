@@ -5,7 +5,8 @@ description = "AFMTextV7 3B LoRA training"
 [profiling]
 enable_profiling = false
 save_traces_folder = "profile_trace"
-profile_freq = 100
+profile_freq = 20
+profiler_active = 4
 enable_memory_snapshot = false
 save_memory_snapshot_folder = "memory_snapshot"
 
@@ -69,7 +70,7 @@ sa_block_kv_dkv = 2048
 sa_block_kv_dkv_compute = 2048
 sa_block_q_dq = 2048
 sa_block_kv_dq = 2048
-compile_mode = "whole"
+compile_mode = "layer"
 enable_manual_ddp = false
 use_lora = true
 
@@ -85,7 +86,7 @@ async_mode = "disabled"  # ["disabled", "async", "async_with_pinned_mem"]
 mode = "full"  # uses TAMM's checkpoint_activations() on both segments
 
 [compile]
-enable = true
+enable = false
 backend = "tpu"
 components = ["model", "loss"]
 
