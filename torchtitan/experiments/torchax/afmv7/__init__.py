@@ -17,7 +17,7 @@ except ValueError:
   pass
 
 
-# HACK: torch_xla2 does not support `aten.normal_` for in-place modifications
+# HACK: torchax does not support `aten.normal_` for in-place modifications
 # during meta-device tracing (which LoRA uses). We monkeypatch `torch.nn.init.normal_`
 # to use `torch.randn_like` and `copy_()`, which XLA perfectly lowers to JAX.
 _original_normal_ = torch.nn.init.normal_
