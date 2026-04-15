@@ -356,7 +356,9 @@ def start_trainer(job_config: JobConfig) -> None:
   with torch.no_grad():
     model.init_weights()
 
-  model_annotator.wrap_model(model)
+  # Enable profiling annotations only if compilation is disabled.
+  if not job_config.compile.enable:
+    model_annotator.wrap_model(model)
 
   # Build optimizer over trainable (adapter) params only.
   trainable_params = [p for p in model.parameters() if p.requires_grad]
@@ -384,7 +386,9 @@ def start_trainer(job_config: JobConfig) -> None:
 
   if job_config.compile.enable and "optimizer" in job_config.compile.components:
     logger.info("Applying torch.compile to optimizer.step")
-    optimizer.step = torch.compile(optimizer.step)
+    optimizer.step = torch.compile(
+        optimizer.step, backend=job_config.compile.backend, fullgraph=True, dynamic=False
+    )
 
   if torch.distributed.is_initialized():
     torch.distributed.barrier()

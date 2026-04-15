@@ -236,13 +236,22 @@ def parallelize_afmv7(
       adapted_layers = [
           m for m in model.model.modules() if isinstance(m, AdaptedLayer)
       ]
-      for m in adapted_layers:
-        replicate(
-            m.adapters,
-            device_mesh=lora_dp_mesh,
-            bucket_cap_mb=100,
-        )
-      logger.info("Applied DDP/replicate to LoRA adapters")
+
+      # Wrap all adapters into a single module list to call replicate() once.
+      # Compared calling replicate() on each adapter individually in a loop,
+      # this avoids creating unique dynamic types per adapter which causes
+      # Dynamo to recompile every adapter.
+      adapter_group = torch.nn.ModuleList(
+          [m.adapters for m in adapted_layers]
+      )
+
+      replicate(
+          adapter_group,
+          device_mesh=lora_dp_mesh,
+          bucket_cap_mb=100,
+      )
+
+      logger.info("Applied DDP/replicate to LoRA adapters via AdapterGroup")
 
   return model
 
@@ -312,14 +321,14 @@ def apply_compile(
   if compile_mode == "whole":
     logger.info("Applying torch.compile to Whole Model.")
     model.model = torch.compile(
-        inner, backend=job_config.compile.backend, fullgraph=True
+        inner, backend=job_config.compile.backend, fullgraph=True, dynamic=False
     )
   elif compile_mode == "block":
     logger.info("Applying torch.compile to AFMTextV7 Segments (Block-level).")
     for seg_id, seg in inner.layers.named_children():
       logger.info(f"Compiling segment {seg_id}")
       compiled = torch.compile(
-          seg, backend=job_config.compile.backend, fullgraph=True
+          seg, backend=job_config.compile.backend, fullgraph=True, dynamic=False
       )
       inner.layers.register_module(seg_id, compiled)
   else:
@@ -329,7 +338,7 @@ def apply_compile(
     for seg in (inner.layers.segment_0, inner.layers.segment_1):
       for layer_id, layer in seg.named_children():
         compiled = torch.compile(
-            layer, backend=job_config.compile.backend, fullgraph=True
+            layer, backend=job_config.compile.backend, fullgraph=True, dynamic=False
         )
         seg.register_module(layer_id, compiled)
 
