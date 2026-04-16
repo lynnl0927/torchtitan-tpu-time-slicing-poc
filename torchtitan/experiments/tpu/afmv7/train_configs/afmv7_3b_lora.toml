@@ -73,6 +73,7 @@ sa_block_kv_dq = 2048
 compile_mode = "layer"
 enable_manual_ddp = false
 use_lora = true
+eager_mode = "DEFER_AND_FUSE"
 
 [checkpoint]
 enable = false
