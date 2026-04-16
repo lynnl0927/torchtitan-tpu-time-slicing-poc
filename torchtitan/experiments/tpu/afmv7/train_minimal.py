@@ -17,6 +17,7 @@ from typing import Tuple
 from jax import profiler as jax_profiler
 import torch
 import torch.nn.functional as F
+from torchtitan.components import metrics
 import torchtitan.config
 import torchtitan.distributed
 from torchtitan.distributed import utils as dist_utils
@@ -306,6 +307,15 @@ def start_trainer(job_config: JobConfig) -> None:
       model_args,
   )
 
+  build_metrics_processor_fn = (
+      metrics.build_metrics_processor
+      if train_spec.build_metrics_processor_fn is None
+      else train_spec.build_metrics_processor_fn
+  )
+  metrics_processor = build_metrics_processor_fn(
+      job_config, parallel_dims, model_args
+  )
+
   with (
       torch.device("meta"),
       utils.set_default_dtype(TORCH_DTYPE_MAP[job_config.training.dtype]),
@@ -357,7 +367,7 @@ def start_trainer(job_config: JobConfig) -> None:
     model.init_weights()
 
   # Enable profiling annotations only if compilation is disabled.
-  if not job_config.compile.enable:
+  if not job_config.compile.enable and job_config.profiling.enable_profiling:
     model_annotator.wrap_model(model)
 
   # Build optimizer over trainable (adapter) params only.
@@ -387,7 +397,10 @@ def start_trainer(job_config: JobConfig) -> None:
   if job_config.compile.enable and "optimizer" in job_config.compile.components:
     logger.info("Applying torch.compile to optimizer.step")
     optimizer.step = torch.compile(
-        optimizer.step, backend=job_config.compile.backend, fullgraph=True, dynamic=False
+        optimizer.step,
+        backend=job_config.compile.backend,
+        fullgraph=True,
+        dynamic=False,
     )
 
   if torch.distributed.is_initialized():
@@ -408,6 +421,7 @@ def start_trainer(job_config: JobConfig) -> None:
       model_param_count,
       num_flops_per_token,
   ) = model_args.get_nparams_and_flops(model, job_config.training.seq_len)
+  metrics_processor.num_flops_per_token = num_flops_per_token
 
   logger.info(
       "Model %s %s size: %s total parameters",
@@ -429,12 +443,14 @@ def start_trainer(job_config: JobConfig) -> None:
   accumulated_tokens = 0
   accumulated_time = 0.0
   accumulated_steps = 0
+
   warmup_steps = job_config.lr_scheduler.warmup_steps
 
   from torchtitan.experiments.tpu import jax_profiling
 
   maybe_enable_profiling = jax_profiling.maybe_enable_profiling
 
+  ntokens_seen = 0
   with maybe_enable_profiling(
       job_config.profiling,
       global_step=0,
@@ -442,6 +458,10 @@ def start_trainer(job_config: JobConfig) -> None:
   ) as profiler:
     for step in range(steps):
       step_start = time.perf_counter()
+      step_tokens = local_batch_size * seq_len
+      ntokens_seen += step_tokens
+      metrics_processor.ntokens_since_last_log += step_tokens
+      metrics_processor.data_loading_times.append(0.0)
       with jax_profiler.TraceAnnotation("train", step_num=step):
         loss = train_step(
             model,
@@ -470,40 +490,32 @@ def start_trainer(job_config: JobConfig) -> None:
 
       step_end = time.perf_counter()
       step_time = step_end - step_start
-      step_tokens = local_batch_size * seq_len
 
       accumulated_tokens += step_tokens
       accumulated_time += step_time
       accumulated_steps += 1
 
-      if should_log:
-        tps = accumulated_tokens / accumulated_time
-        avg_step_time = accumulated_time / accumulated_steps
-        accumulated_tokens = 0
-        accumulated_time = 0.0
-        accumulated_steps = 0
-      else:
-        tps = step_tokens / step_time
-        avg_step_time = step_time
-
-      tflops = num_flops_per_token * tps / 1e12
-      mfu = 100 * num_flops_per_token * tps / peak_flops
-
       if step >= warmup_steps:
         total_tokens += step_tokens
         total_time += step_time
 
-      if rank == 0 and should_log:
-        logger.info(
-            "Step %d/%d | Loss: %.4f | Avg Step time: %.2f s | TPS: %.0f |"
-            " TFlops: %.2f | MFU: %.2f%%",
+      if should_log:
+        avg_step_time = accumulated_time / accumulated_steps
+        accumulated_tokens = 0
+        accumulated_time = 0.0
+        accumulated_steps = 0
+
+        extra_metrics = {
+            "lr": optimizer.param_groups[0]["lr"],
+            "n_tokens_seen": ntokens_seen,
+            "avg_step_time": avg_step_time,
+        }
+        metrics_processor.log(
             step + 1,
-            steps,
             loss_cpu / step_tokens,
-            avg_step_time,
-            tps,
-            tflops,
-            mfu,
+            loss_cpu / step_tokens,
+            float("nan"),
+            extra_metrics=extra_metrics,
         )
 
   avg_tps = total_tokens / total_time if total_time > 0 else 0.0
