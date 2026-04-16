@@ -1,0 +1,98 @@
+[job]
+dump_folder = "./outputs"
+description = "AFMTextV7 3B LoRA training"
+
+[profiling]
+enable_profiling = false
+save_traces_folder = "profile_trace"
+profile_freq = 20
+profiler_active = 4
+enable_memory_snapshot = false
+save_memory_snapshot_folder = "memory_snapshot"
+
+[metrics]
+log_freq = 5
+enable_tensorboard = false
+save_tb_folder = "tb"
+enable_wandb = false
+
+[model]
+name = "afmv7_tpu"
+flavor = "3B-lora"
+# For production, set this to the AFM SentencePiece .model file or a directory
+# containing one (vocab_size=153600). The default below uses the built-in HF
+# test tokenizer (vocab_size=2002) as a dummy — token IDs are valid indices in
+# the 3B embedding so it won't crash, but tokenization is meaningless.
+hf_assets_path = "./tests/assets/tokenizer"
+
+[optimizer]
+name = "AdamW"
+lr = 3e-4
+eps = 1e-8
+implementation = "foreach"
+
+[lr_scheduler]
+warmup_steps = 10
+decay_ratio = 0.8
+decay_type = "linear"
+min_lr_factor = 0.1
+
+[training]
+local_batch_size = 4
+seq_len = 8192
+max_norm = 1.0
+steps = 20
+dataset = "c4_test"
+dtype = "bfloat16"
+mixed_precision_param = "bfloat16"
+
+[parallelism]
+data_parallel_replicate_degree = -1
+data_parallel_shard_degree = 1
+fsdp_reshard_after_forward = "never"
+tensor_parallel_degree = 1
+enable_async_tensor_parallel = false
+pipeline_parallel_degree = 1
+context_parallel_degree = 1
+
+[tpu_config]
+enable_amp = true
+use_loss_kernel = true
+use_splash_attention_kernel = true
+use_graph_split = true
+force_lora_parameter_ddp = true
+sa_block_q = 2048
+sa_block_kv = 2048
+sa_block_dkv = 2048
+sa_block_kv_compute = 2048
+sa_block_q_dkv = 2048
+sa_block_kv_dkv = 2048
+sa_block_kv_dkv_compute = 2048
+sa_block_q_dq = 2048
+sa_block_kv_dq = 2048
+compile_mode = "layer"
+enable_manual_ddp = true
+use_lora = true
+eager_mode = "DEFER_AND_FUSE"
+
+[checkpoint]
+enable = false
+folder = "checkpoint"
+interval = 500
+last_save_model_only = true
+export_dtype = "float32"
+async_mode = "disabled"  # ["disabled", "async", "async_with_pinned_mem"]
+
+[activation_checkpoint]
+mode = "full"  # uses TAMM's checkpoint_activations() on both segments
+
+[compile]
+enable = true
+backend = "tpu"
+components = ["model", "loss"]
+
+[validation]
+enable = false
+dataset = "c4_test"
+freq = 500
+steps = 10
