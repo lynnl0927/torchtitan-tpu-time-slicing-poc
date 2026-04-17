@@ -53,10 +53,8 @@ xpk workload create \
     --tpu_config.lora_dtype=bfloat16 \
     --tpu_config.enable_manual_ddp \
     --tpu_config.no-enable_amp \
-    --tpu_config.enable_manual_ddp \
-    --training.local_batch_size=3 \
-    --parallelism.data_parallel_replicate_degree=1 \
-    --parallelism.data_parallel_shard_degree=-1"
+    --parallelism.data_parallel_replicate_degree=-1 \
+    --parallelism.data_parallel_shard_degree=1"
 ```
 
 **4/16/26: With this configuration you should observe the following metrics**
