@@ -17,8 +17,8 @@ export REPOSITORY=YOUR_REPOSITORY # Repository containing docker image
 
 ## Notes as of 4/16/26
 
-- TorchTPU whl has to be manually built from source code, follow instructions at: https://github.com/google-pytorch/torch_tpu. TorchTPU hash that was used for this repro: 4ae11503
-- TorchTitan codebase is actively evolving, hash used for this repro: 2a1efc5
+- TorchTPU whl has to be manually built from source code, follow instructions at: https://github.com/google-pytorch/torch_tpu. TorchTPU hash that was used for this repro: feaf47c
+- TorchTitan codebase is actively evolving, hash used for this repro: 23891bb
 - By default LoRA adapter type is set to bfloat16. Setting to float32 causes a crash that team is investigating
 - For compile, we drop the local batch size to 3 to prevent OOM.
 - Automatic mixed precision (AMP) is disabled for 'DDP with compile' configuration (The configuration enables `--tpu_config.enable_manual_ddp` causing `enable_amp` flag to have no effect. We make this explicit with `--tpu_config.no-enable_amp`)
@@ -49,7 +49,7 @@ xpk workload create \
     -m torchtitan.experiments.tpu.afmv7.train_minimal \
     --job.config_file=torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b_lora.toml \
     --compile.enable \
-    --training.local_batch_size=3 \
+    --training.local_batch_size=2 \
     --tpu_config.lora_dtype=bfloat16 \
     --tpu_config.enable_manual_ddp \
     --tpu_config.no-enable_amp \
@@ -59,8 +59,8 @@ xpk workload create \
 
 **4/16/26: With this configuration you should observe the following metrics**
 
-- Average TPS/chip:  9220
-- Average MFU: 29.01%
+- Average TPS/chip: 9776
+- Average MFU: 24.13%
 
 
 ## FSDP with torch.compile and AMP
@@ -97,8 +97,8 @@ xpk workload create \
 ```
 **4/16/26: With this configuration you should observe the following metrics**
 
-- Average TPS (excl. 10 warmup steps): 9202
-- Average MFU: 28.95%
+- Average TPS (excl. 10 warmup steps): 9268
+- Average MFU: 22.88%
 
 
 ## FSDP eager mode with AMP
