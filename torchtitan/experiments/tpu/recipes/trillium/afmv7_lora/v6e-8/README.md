@@ -61,8 +61,8 @@ xpk workload create \
 
 **4/16/26: With this configuration you should observe the following metrics**
 
-- Average TPS/chip:  9,202
-- Average MFU: 28.95%
+- Average TPS/chip:  9220
+- Average MFU: 29.01%
 
 
 ## FSDP with torch.compile and AMP
@@ -99,8 +99,8 @@ xpk workload create \
 ```
 **4/16/26: With this configuration you should observe the following metrics**
 
-- Average TPS (excl. 10 warmup steps): 9102 #TODO
-- Average MFU: 22.47%
+- Average TPS (excl. 10 warmup steps): 9202
+- Average MFU: 28.95%
 
 
 ## FSDP eager mode with AMP
