@@ -1,5 +1,6 @@
 """Parallelization utilities for AFMTextV7 on TPU."""
 
+from enum import Enum, auto
 import torch
 from torch import nn
 from torch.distributed._composable.replicate import replicate
@@ -15,6 +16,51 @@ from torchtitan.experiments.tpu import workarounds
 from torchtitan.experiments.tpu.afmv7.model.model import OutputMode
 from torchtitan.models.llama3.infra.parallelize import disable_fsdp_gradient_division
 from torchtitan.tools.logging import logger
+
+
+class ParallelStrategy(Enum):
+  # FSDP
+  SIMPLE_FSDP = auto()  # FSDP/HSDP via SimpleFSDP
+  REGULAR_FSDP = auto()  # FSDP/HSDP via FSDP2
+  # DDP
+  SIMPLE_FSDP_DDP = auto()  # DDP via SimpleFSDP (mode="replicate")
+  MANUAL_DDP_HACK = auto()  # Skipped wrapping, user handles All-Reduce
+  FSDP_REPL_HACK = auto()  # FSDP2 hack for DDP (AMP workaround)
+  NATIVE_DDP = auto()  # Standard PyTorch DDP
+  # No parallelism
+  NONE = auto()
+
+
+def _determine_parallel_strategy(parallel_dims, job_config) -> ParallelStrategy:
+  fsdp_enabled = parallel_dims.fsdp_enabled
+  ddp_enabled = parallel_dims.dp_replicate_enabled
+
+  use_simple = False
+  manual_ddp = False
+  amp = True
+
+  if isinstance(job_config, tpu_job_config.TPUJobConfig):
+    use_simple = job_config.tpu_config.use_simple_fsdp
+    manual_ddp = job_config.tpu_config.enable_manual_ddp
+    amp = job_config.tpu_config.enable_amp
+
+  if fsdp_enabled:
+    return (
+        ParallelStrategy.SIMPLE_FSDP
+        if use_simple
+        else ParallelStrategy.REGULAR_FSDP
+    )
+
+  if ddp_enabled:
+    if use_simple:
+      return ParallelStrategy.SIMPLE_FSDP_DDP
+    if manual_ddp:
+      return ParallelStrategy.MANUAL_DDP_HACK
+    if amp:
+      return ParallelStrategy.FSDP_REPL_HACK
+    return ParallelStrategy.NATIVE_DDP
+
+  return ParallelStrategy.NONE
 
 
 def parallelize_afmv7(
@@ -117,20 +163,30 @@ def parallelize_afmv7(
 
   model_output_mode = getattr(model, "_output_mode", OutputMode.LOGITS)
 
-  use_simple_fsdp = False
-  if isinstance(job_config, tpu_job_config.TPUJobConfig):
-    use_simple_fsdp = job_config.tpu_config.use_simple_fsdp
+  strategy = _determine_parallel_strategy(parallel_dims, job_config)
 
+  # Resolve DeviceMesh and mode based on active dimensions
   if parallel_dims.fsdp_enabled:
     if parallel_dims.dp_replicate_enabled:
-      dp_mesh_dim_names = ["dp_replicate", "fsdp"]
+      dp_mesh = parallel_dims.get_mesh(["dp_replicate", "fsdp"])
       dp_mode = "hybrid_shard"
     else:
-      dp_mesh_dim_names = ["fsdp"]
+      dp_mesh = parallel_dims.get_mesh(["fsdp"])
       dp_mode = "fully_shard"
-    dp_mesh = parallel_dims.get_mesh(dp_mesh_dim_names)
+  elif parallel_dims.dp_replicate_enabled:
+    dp_mesh = parallel_dims.get_mesh("dp_replicate")
+    dp_mode = "replicate"
+  else:
+    dp_mesh = None
+    dp_mode = None
 
-    if use_simple_fsdp:
+  # Execute the selected strategy
+  if (
+      strategy == ParallelStrategy.SIMPLE_FSDP
+      or strategy == ParallelStrategy.SIMPLE_FSDP_DDP
+  ):
+    mp_policy = None
+    if enable_amp:
       mp_policy = SimpleFSDPMixedPrecisionPolicy(
           param_dtype=torchtitan.config.TORCH_DTYPE_MAP[
               job_config.training.mixed_precision_param
@@ -138,81 +194,77 @@ def parallelize_afmv7(
           reduce_dtype=torchtitan.config.TORCH_DTYPE_MAP[
               job_config.training.mixed_precision_reduce
           ],
-      ) if enable_amp else None
-      model = simple_fsdp_data_parallel(
-          model,
-          dp_mesh,
-          mode=dp_mode,
-          mp_policy=mp_policy,
       )
-      logger.info(
-          "Applied Simple FSDP (dp mode=%s) to the model", dp_mode
-      )
+    model = simple_fsdp_data_parallel(
+        model,
+        dp_mesh,
+        mode=dp_mode,
+        mp_policy=mp_policy,
+        ignored_params=ignored_lora_params,
+    )
+    logger.info("Applied Simple FSDP (dp mode=%s) to the model", dp_mode)
+
+  elif strategy == ParallelStrategy.REGULAR_FSDP:
+    apply_fsdp(
+        model,
+        dp_mesh=dp_mesh,
+        param_dtype=torchtitan.config.TORCH_DTYPE_MAP[
+            job_config.training.mixed_precision_param
+        ],
+        reduce_dtype=torchtitan.config.TORCH_DTYPE_MAP[
+            job_config.training.mixed_precision_reduce
+        ],
+        cpu_offload=job_config.training.enable_cpu_offload,
+        reshard_after_forward_policy=job_config.parallelism.fsdp_reshard_after_forward,
+        pp_enabled=parallel_dims.pp_enabled,
+        keep_output_weight_gathered=(
+            model_output_mode == OutputMode.HIDDEN_AND_WEIGHT
+        ),
+        enable_amp=enable_amp,
+        lora_params=ignored_lora_params,
+    )
+    if parallel_dims.dp_replicate_enabled:
+      logger.info("Applied HSDP to the model")
     else:
-      apply_fsdp(
-          model,
-          dp_mesh=dp_mesh,
-          param_dtype=torchtitan.config.TORCH_DTYPE_MAP[
-              job_config.training.mixed_precision_param
-          ],
-          reduce_dtype=torchtitan.config.TORCH_DTYPE_MAP[
-              job_config.training.mixed_precision_reduce
-          ],
-          cpu_offload=job_config.training.enable_cpu_offload,
-          reshard_after_forward_policy=job_config.parallelism.fsdp_reshard_after_forward,
-          pp_enabled=parallel_dims.pp_enabled,
-          keep_output_weight_gathered=(
-              model_output_mode == OutputMode.HIDDEN_AND_WEIGHT),
-          enable_amp=enable_amp,
-          lora_params=ignored_lora_params,
-      )
+      logger.info("Applied FSDP to the model")
+    if job_config.training.enable_cpu_offload:
+      logger.info("Applied CPU Offloading to the model")
 
-      if parallel_dims.dp_replicate_enabled:
-        logger.info("Applied HSDP to the model")
-      else:
-        logger.info("Applied FSDP to the model")
+  elif strategy == ParallelStrategy.MANUAL_DDP_HACK:
+    if enable_amp:
+      raise RuntimeError("Manual DDP does not support AMP")
+    logger.info("Skipping FSDP/DDP wrapping for manual All-Reduce DDP")
 
-      if job_config.training.enable_cpu_offload:
-        logger.info("Applied CPU Offloading to the model")
+  elif strategy == ParallelStrategy.FSDP_REPL_HACK:
+    # Workaround for AMP without simple_fsdp: use standard FSDP in replication mode
+    # TODO b/494360665: remove this once torch.autocast is supported
+    apply_fsdp(
+        model,
+        dp_mesh=dp_mesh,
+        param_dtype=torchtitan.config.TORCH_DTYPE_MAP[
+            job_config.training.mixed_precision_param
+        ],
+        reduce_dtype=torchtitan.config.TORCH_DTYPE_MAP[
+            job_config.training.mixed_precision_reduce
+        ],
+        cpu_offload=job_config.training.enable_cpu_offload,
+        reshard_after_forward_policy=job_config.parallelism.fsdp_reshard_after_forward,
+        pp_enabled=parallel_dims.pp_enabled,
+        keep_output_weight_gathered=(
+            model_output_mode == OutputMode.HIDDEN_AND_WEIGHT
+        ),
+        enable_amp=enable_amp,
+    )
+    logger.info("Applied FSDP to the model for replication mode because of AMP")
 
-  elif parallel_dims.dp_replicate_enabled:
-    dp_replicate_mesh = parallel_dims.get_mesh("dp_replicate")
-    if use_simple_fsdp:
-      raise RuntimeError("Simple FSDP does not support dp_replicate without fsdp enabled")
-
-    if parallel_dims.world_size != dp_replicate_mesh.size():
+  elif strategy == ParallelStrategy.NATIVE_DDP:
+    if parallel_dims.world_size != dp_mesh.size():
       raise RuntimeError("DDP has not supported > 1D parallelism")
-
-    if job_config.tpu_config.enable_manual_ddp:
-      logger.info("Skipping FSDP/DDP wrapping for manual All-Reduce DDP")
-    elif enable_amp:
-      # TODO b/494360665: remove this once torch.autocast is supported
-      apply_fsdp(
-          model,
-          dp_mesh=dp_replicate_mesh,
-          param_dtype=torchtitan.config.TORCH_DTYPE_MAP[
-              job_config.training.mixed_precision_param
-          ],
-          reduce_dtype=torchtitan.config.TORCH_DTYPE_MAP[
-              job_config.training.mixed_precision_reduce
-          ],
-          cpu_offload=job_config.training.enable_cpu_offload,
-          reshard_after_forward_policy=job_config.parallelism.fsdp_reshard_after_forward,
-          pp_enabled=parallel_dims.pp_enabled,
-          keep_output_weight_gathered=(
-              model_output_mode == OutputMode.HIDDEN_AND_WEIGHT
-          ),
-          enable_amp=enable_amp,
-      )
-      logger.info(
-          "Applied FSDP to the model for replication mode because of AMP"
-      )
-    else:
-      apply_ddp(
-          model,
-          dp_replicate_mesh,
-          enable_compile=model_compile_enabled,
-      )
+    apply_ddp(
+        model,
+        dp_mesh,
+        enable_compile=model_compile_enabled,
+    )
 
   model.lora_params = lora_params
   model.force_lora_parameter_ddp = (
@@ -233,6 +285,7 @@ def parallelize_afmv7(
 
     if lora_dp_mesh:
       from tamm.adapters import AdaptedLayer
+
       adapted_layers = [
           m for m in model.model.modules() if isinstance(m, AdaptedLayer)
       ]
@@ -241,9 +294,7 @@ def parallelize_afmv7(
       # Compared calling replicate() on each adapter individually in a loop,
       # this avoids creating unique dynamic types per adapter which causes
       # Dynamo to recompile every adapter.
-      adapter_group = torch.nn.ModuleList(
-          [m.adapters for m in adapted_layers]
-      )
+      adapter_group = torch.nn.ModuleList([m.adapters for m in adapted_layers])
 
       replicate(
           adapter_group,
@@ -290,7 +341,7 @@ def _maybe_freeze_for_lora(model: nn.Module) -> set[nn.Parameter]:
     for p in m.adapters.parameters():
       p.requires_grad_(True)
       lora_params.add(p)
-  
+
   return lora_params
 
 
@@ -298,6 +349,7 @@ def apply_ac(model: nn.Module) -> None:
   """Apply activation checkpointing via PyTorch Distributed's wrapper."""
   logger.info("Applying activation checkpointing via ptd_checkpoint_wrapper.")
   from torchtitan.experiments.tpu.utils import ptd_checkpoint_wrapper_with_early_stop as ptd_checkpoint_wrapper
+
   for segment in model.model.layers.children():
     for layer_id, layer in segment.named_children():
       wrapped_layer = ptd_checkpoint_wrapper(layer, preserve_rng_state=False)
@@ -338,7 +390,10 @@ def apply_compile(
     for seg in (inner.layers.segment_0, inner.layers.segment_1):
       for layer_id, layer in seg.named_children():
         compiled = torch.compile(
-            layer, backend=job_config.compile.backend, fullgraph=True, dynamic=False
+            layer,
+            backend=job_config.compile.backend,
+            fullgraph=True,
+            dynamic=False,
         )
         seg.register_module(layer_id, compiled)
 

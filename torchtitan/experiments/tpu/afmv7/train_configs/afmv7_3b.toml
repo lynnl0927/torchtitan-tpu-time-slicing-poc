@@ -5,7 +5,8 @@ description = "AFMTextV7 3B training"
 [profiling]
 enable_profiling = false
 save_traces_folder = "profile_trace"
-profile_freq = 100
+profile_freq = 19
+profiler_active = 3
 enable_memory_snapshot = false
 save_memory_snapshot_folder = "memory_snapshot"
 
@@ -31,7 +32,7 @@ eps = 1e-8
 implementation = "foreach"
 
 [lr_scheduler]
-warmup_steps = 5
+warmup_steps = 10
 decay_ratio = 0.8
 decay_type = "linear"
 min_lr_factor = 0.1
@@ -55,6 +56,7 @@ pipeline_parallel_degree = 1
 context_parallel_degree = 1
 
 [tpu_config]
+eager_mode = "DEFER_AND_FUSE"
 enable_amp = true
 use_loss_kernel = true
 use_splash_attention_kernel = true
@@ -69,9 +71,10 @@ sa_block_kv_dkv = 2048
 sa_block_kv_dkv_compute = 2048
 sa_block_q_dq = 2048
 sa_block_kv_dq = 2048
-compile_mode = "whole"
+compile_mode = "layer"
 enable_manual_ddp = false
-eager_mode = "DEFER_AND_FUSE"
+use_lora = false
+use_simple_fsdp = false
 
 [checkpoint]
 enable = false
@@ -85,7 +88,8 @@ async_mode = "disabled"
 mode = "full"
 
 [compile]
-enable = true
+enable = flase
+backend = "tpu"
 components = ["model", "loss"]
 
 [validation]
