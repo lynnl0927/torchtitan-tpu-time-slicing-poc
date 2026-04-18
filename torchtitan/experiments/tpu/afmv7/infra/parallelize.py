@@ -16,6 +16,7 @@ from torchtitan.experiments.tpu import workarounds
 from torchtitan.experiments.tpu.afmv7.model.model import OutputMode
 from torchtitan.models.llama3.infra.parallelize import disable_fsdp_gradient_division
 from torchtitan.tools.logging import logger
+from torchtitan.experiments.tpu import utils as tpu_utils
 
 
 class ParallelStrategy(Enum):
@@ -104,8 +105,10 @@ def parallelize_afmv7(
   if isinstance(job_config, tpu_job_config.TPUJobConfig):
     use_splash_attention_kernel = (
         job_config.tpu_config.use_splash_attention_kernel
-    )
-    use_loss_kernel = job_config.tpu_config.use_loss_kernel
+    ) and tpu_utils.get_device_type() == "tpu"
+    use_loss_kernel = (
+        job_config.tpu_config.use_loss_kernel
+    ) and tpu_utils.get_device_type() == "tpu"
     enable_amp = job_config.tpu_config.enable_amp
 
   if use_splash_attention_kernel:
