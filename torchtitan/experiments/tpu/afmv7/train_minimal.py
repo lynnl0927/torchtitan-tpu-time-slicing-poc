@@ -215,6 +215,7 @@ def start_trainer(job_config: JobConfig) -> None:
 
   if rank == 0:
     torchtitan.tools.logging.init_logger()
+    job_config.maybe_log()
 
   device = tpu_utils.get_device()
 
@@ -248,23 +249,26 @@ def start_trainer(job_config: JobConfig) -> None:
       world_size=world_size,
   )
   logger.info("parallel_dims: %s", parallel_dims)
+  job_config.maybe_log()
 
+  # TODO b/498659628: Re-enable set_determinism once the hang on TPU is fixed.
   seed = job_config.debug.seed or 42
-  torch.manual_seed(seed)
-  logger.info(
-      "Set manual seed to %d on all ranks (workaround for set_determinism"
-      " hang)",
-      seed,
-  )
-  # TODO b/498659628: Re-enable set_determinism once the hang is fixed.
-  # if world_size > 1:
-  #   logger.info("world_mesh: %s", parallel_dims.world_mesh)
-  #   dist_utils.set_determinism(
-  #       parallel_dims,
-  #       device,
-  #       job_config.debug,
-  #       distinct_seed_mesh_dims=["pp"],
-  #   )
+  if utils.get_device_type() == "tpu":
+    torch.manual_seed(seed)
+    logger.info(
+        "Set manual seed to %d on all ranks (workaround for set_determinism"
+        " hang)",
+        seed,
+    )
+  else:
+    if world_size > 1:
+      logger.info("world_mesh: %s", parallel_dims.world_mesh)
+      dist_utils.set_determinism(
+          parallel_dims,
+          device,
+          job_config.debug,
+          distinct_seed_mesh_dims=["pp"],
+      )
 
   use_loss_kernel = (
       isinstance(job_config, TPUJobConfig)
@@ -479,9 +483,9 @@ def start_trainer(job_config: JobConfig) -> None:
           loss_cpu = loss.cpu().item()
         should_log = True
       else:
-        import torch_tpu._internal.sync  # pylint: disable=g-import-not-at-top
-
-        torch_tpu._internal.sync.synchronize(loss, wait=False)
+        if use_graph_split:
+          import torch_tpu._internal.sync  # pylint: disable=g-import-not-at-top
+          torch_tpu._internal.sync.synchronize(loss, wait=False)
         loss_cpu = float("nan")
         should_log = False
 
