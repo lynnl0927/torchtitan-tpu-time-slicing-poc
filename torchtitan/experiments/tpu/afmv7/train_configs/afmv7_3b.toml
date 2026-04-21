@@ -43,7 +43,7 @@ seq_len = 8192
 max_norm = 1.0
 steps = 20
 dataset = "c4_test"
-dtype = "bfloat16"
+dtype = "float32"
 mixed_precision_param = "bfloat16"
 
 [parallelism]
@@ -88,7 +88,7 @@ async_mode = "disabled"
 mode = "full"
 
 [compile]
-enable = flase
+enable = false
 backend = "tpu"
 components = ["model", "loss"]
 
