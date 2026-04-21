@@ -11,6 +11,44 @@ from torchtitan.tools.logging import logger
 from .args import AFMTextV7ModelArgs
 
 
+_LORA_DTYPE_PATCH_APPLIED = False
+
+
+def _patch_tamm_lora_for_mixed_precision() -> None:
+    """Make LoRA tolerate dtype mismatches between weights and LoRA dtype.
+
+    When base weights are in a different dtype than LoRA weights, the matmul in
+    `_transform_outputs_impl` will fail due to the dtype mismatch.
+    This happens when using different dtypes for base weights and LoRA weights,
+    and when using FSDP Mixed Precision that's only applied to base weights.
+
+    Fix: cast x to LoRA weight dtype for the matmul, then cast the result
+    back to the surrounding activation dtype. Same-dtype `.to()` is a no-op.
+    """
+    global _LORA_DTYPE_PATCH_APPLIED
+    if _LORA_DTYPE_PATCH_APPLIED:
+        return
+
+    from tamm._adapters_v1.layer_adapters import lora as _lora_mod
+
+    def _transform_outputs_impl(self, x, outputs):
+        x = x.flatten(end_dim=-2)
+        x = x.to(self.a_transpose.dtype)
+        x = torch.matmul(x, self.a_transpose)
+        batch_shape = outputs.shape[:-1]
+        outputs_f = outputs.flatten(end_dim=-2)
+        result = torch.addmm(
+            outputs_f.to(x.dtype), x, self.b_transpose, alpha=self.scale
+        )
+        return result.to(outputs.dtype).reshape(*batch_shape, -1)
+
+    _lora_mod.LoRA._transform_outputs_impl = _transform_outputs_impl
+    _LORA_DTYPE_PATCH_APPLIED = True
+    logger.info(
+        "Patched tamm.LoRA._transform_outputs_impl for mixed-precision safety"
+    )
+
+
 class OutputMode(enum.Enum):
     """Controls what AFMTextV7Wrapper.forward returns."""
     LOGITS = "logits"             # normal path: output.predictions
@@ -45,6 +83,7 @@ class AFMTextV7Wrapper(ModelProtocol):
         adapters = None
         if model_args.use_lora:
             import tamm.adapters
+            _patch_tamm_lora_for_mixed_precision()
             lora_dtype = getattr(torch, model_args.lora_dtype)
             adapters = {
                 "lora": tamm.adapters.LoRAModelAdapter(
