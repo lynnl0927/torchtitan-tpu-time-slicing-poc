@@ -18,6 +18,7 @@ from jax import profiler as jax_profiler
 import torch
 import torch.nn.functional as F
 from torchtitan.components import metrics
+import torchtitan.components.tokenizer
 import torchtitan.config
 import torchtitan.distributed
 from torchtitan.distributed import utils as dist_utils
@@ -109,6 +110,7 @@ def partitioned_linear_softmax_cross_entropy_loss(
 def train_step(
     model: torch.nn.Module,
     tokens: torch.Tensor,
+    targets: torch.Tensor,
     optimizer: torch.optim.Optimizer,
     loss_fn,
     use_pallas: bool = False,
@@ -138,21 +140,20 @@ def train_step(
   Args:
     model: Parallelised AFMv7 wrapper.
     tokens: Input token ids, shape (B, S).
+    targets: Target token ids, shape (B, S).
     optimizer: Optimizer for the trainable (adapter) parameters.
     loss_fn: pallas_cross_entropy_loss or
       partitioned_linear_softmax_cross_entropy_loss; unused for logits path.
     use_pallas: Enable the Pallas fused-kernel path.
     use_chunked_loss: Enable the chunked CE path.
     graph_split: Insert synchronize() between forward+loss and backward.
+    manual_ddp: Enable manual DDP all-reduce in training loop.
 
   Returns:
     Scalar loss tensor.
   """
   with jax_profiler.TraceAnnotation("optimizer.zero_grad"):
     optimizer.zero_grad()
-
-  # Shift labels by 1: position i predicts token i+1.
-  targets = torch.roll(tokens, -1, dims=1)
 
   if graph_split:
     import torch_tpu._internal.sync  # pylint: disable=g-import-not-at-top
@@ -204,6 +205,24 @@ def train_step(
   return loss
 
 
+def build_random_dataloader(job_config, vocab_size, device):
+  """Yields the same random tokens every step by generating the tensor once
+  outside the loop. This matches the behavior of the train_adhoc.py script.
+
+  Args:
+    job_config: The configuration for the training job.
+    vocab_size: The size of the vocabulary.
+    device: The device to put the data on.
+  """
+  local_batch_size = job_config.training.local_batch_size
+  seq_len = job_config.training.seq_len
+  x = torch.randint(
+      0, vocab_size, (local_batch_size, seq_len + 1), device=device
+  )
+  while True:
+    yield {"input": x[:, :-1]}, x[:, 1:]
+
+
 def start_trainer(job_config: JobConfig) -> None:
   """Starts the training process.
 
@@ -250,6 +269,21 @@ def start_trainer(job_config: JobConfig) -> None:
   )
   logger.info("parallel_dims: %s", parallel_dims)
   job_config.maybe_log()
+
+  # Default to 1 data worker and rank 0 for single-device training.
+  batch_degree, batch_rank = 1, 0
+  if world_size > 1:
+    if parallel_dims.dp_enabled:
+      # If data parallelism is enabled, shard data across replicas.
+      batch_mesh = parallel_dims.get_mesh("batch")
+      batch_degree, batch_rank = (
+          batch_mesh.size(),
+          batch_mesh.get_local_rank(),
+      )
+    else:
+      # If only model parallelism is used, all devices are in the same replica.
+      # They must see the same data, so degree is 1 and rank is 0.
+      batch_degree, batch_rank = 1, 0
 
   # TODO b/498659628: Re-enable set_determinism once the hang on TPU is fixed.
   seed = job_config.debug.seed or 42
@@ -303,6 +337,26 @@ def start_trainer(job_config: JobConfig) -> None:
 
   model_args = train_spec.model_args[job_config.model.flavor]
   model_args.update_from_config(job_config)
+
+  tokenizer = typing.cast(
+      torchtitan.components.tokenizer.HuggingFaceTokenizer,
+      train_spec.build_tokenizer_fn(job_config)
+      if train_spec.build_tokenizer_fn is not None
+      else None
+  )
+
+  if job_config.training.dataset == "random":
+    logger.info("Using random data loader instead of real dataset.")
+    dataloader = build_random_dataloader(
+        job_config, model_args.vocab_size, device  # pytype: disable=attribute-error
+    )
+  else:
+    dataloader = train_spec.build_dataloader_fn(
+        dp_world_size=batch_degree,
+        dp_rank=batch_rank,
+        tokenizer=tokenizer,
+        job_config=job_config,
+    )
 
   logger.info(
       "Building %s %s with %s",
@@ -413,12 +467,6 @@ def start_trainer(job_config: JobConfig) -> None:
   steps = job_config.training.steps
   local_batch_size = job_config.training.local_batch_size
   seq_len = job_config.training.seq_len
-  vocab_size = model_args.vocab_size  # pytype: disable=attribute-error
-
-  # Fixed dummy input — same tokens every step (matches scratchpad behaviour).
-  tokens = torch.randint(
-      0, vocab_size, (local_batch_size, seq_len), device=device
-  )
 
   # calculate model size and flops per token
   (
@@ -463,16 +511,25 @@ def start_trainer(job_config: JobConfig) -> None:
       global_step=0,
       base_folder=job_config.job.dump_folder,
   ) as profiler:
+    data_iterator = iter(dataloader)
     for step in range(steps):
       step_start = time.perf_counter()
       step_tokens = local_batch_size * seq_len
       ntokens_seen += step_tokens
       metrics_processor.ntokens_since_last_log += step_tokens
-      metrics_processor.data_loading_times.append(0.0)
+
+      t0 = time.perf_counter()
+      batch = next(data_iterator)
+      metrics_processor.data_loading_times.append(time.perf_counter() - t0)
+
+      tokens = batch[0]["input"].to(device)
+      targets = batch[1].to(device)
+
       with jax_profiler.TraceAnnotation("train", step_num=step):
         loss = train_step(
             model,
             tokens,
+            targets,
             optimizer,
             loss_fn,
             use_pallas=use_loss_kernel,
