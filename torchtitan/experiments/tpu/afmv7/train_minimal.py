@@ -450,9 +450,12 @@ def start_trainer(job_config: JobConfig) -> None:
 
   warmup_steps = job_config.lr_scheduler.warmup_steps
 
-  from torchtitan.experiments.tpu import jax_profiling
+  if utils.get_device_type() == "tpu":
+    from torchtitan.experiments.tpu import jax_profiling  # pylint: disable=g-import-not-at-top
+    maybe_enable_profiling = jax_profiling.maybe_enable_profiling
 
-  maybe_enable_profiling = jax_profiling.maybe_enable_profiling
+  else:
+    from torchtitan.tools.profiling import maybe_enable_profiling # pylint: disable=g-import-not-at-top
 
   ntokens_seen = 0
   with maybe_enable_profiling(
