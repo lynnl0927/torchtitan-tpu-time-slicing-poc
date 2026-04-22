@@ -150,12 +150,6 @@ def py3_test(
     kwargs["srcs_version"] = "PY3"
     kwargs["python_version"] = "PY3"
 
-    # TODO b/503890648: remove this once we fix tests to support TorchTPU autoloading.
-    test_env = dict(kwargs.get("env", {}))
-    if "TORCH_DEVICE_BACKEND_AUTOLOAD" not in test_env:
-        test_env["TORCH_DEVICE_BACKEND_AUTOLOAD"] = "0"
-    kwargs["env"] = test_env
-
     if hermetic:
         # Taken from google3/production/dependency/rpc/testing/hermetic/build_defs.bzl.
         allow_network_tag = "requires-net:external"
