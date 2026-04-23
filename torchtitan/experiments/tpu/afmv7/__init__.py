@@ -67,7 +67,7 @@ afmv7_args = {
         use_lora=True,
         lora_rank=4,
         lora_alpha=4.0,
-        lora_dtype="bfloat16",
+        lora_dtype="float32",
     ),
     # Production 3B model with LoRA fine-tuning (matching the sample script).
     "3B-lora": AFMTextV7ModelArgs(
@@ -80,9 +80,9 @@ afmv7_args = {
         hidden_dim_scale_factor=3.25,
         rope_theta=500000.0,
         use_lora=True,
-        lora_rank=32,
+        lora_rank=16,
         lora_alpha=16.0,
-        lora_dtype="bfloat16",
+        lora_dtype="float32",
     ),
 }
 # pytype: disable=wrong-arg-types

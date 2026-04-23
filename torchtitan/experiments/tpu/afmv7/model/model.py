@@ -32,15 +32,37 @@ def _patch_tamm_lora_for_mixed_precision() -> None:
     from tamm._adapters_v1.layer_adapters import lora as _lora_mod
 
     def _transform_outputs_impl(self, x, outputs):
-        x = x.flatten(end_dim=-2)
-        x = x.to(self.a_transpose.dtype)
-        x = torch.matmul(x, self.a_transpose)
+        # LoRA params are stored in fp32 (for optimizer precision) but compute
+        # runs in the activation dtype: both matmuls use activation-dtype
+        # inputs with TPU's native fp32 accumulation, so the big
+        # bf16->fp32 upcast of `x` per adapter is avoided. When LoRA params
+        # already match the activation dtype (e.g. bf16 LoRA), the .to()
+        # calls are no-ops and addmm is used for fusion.
+        out_dtype = outputs.dtype
+        if self.a_transpose.dtype == out_dtype:
+            # Fast path: no cast needed; addmm fuses matmul + add.
+            inner = torch.matmul(x, self.a_transpose)
+            # addmm requires 2D, so flatten. The reshape after preserves shape.
+            batch_shape = outputs.shape[:-1]
+            return torch.addmm(
+                outputs.flatten(end_dim=-2),
+                inner.flatten(end_dim=-2),
+                self.b_transpose,
+                alpha=self.scale,
+            ).reshape(*batch_shape, -1)
+        # Mixed-precision path (fp32 LoRA, bf16 activations): cast params to
+        # activation dtype (no big x cast), use addmm for the final matmul+add
+        # so XLA fuses the kernel.
+        a = self.a_transpose.to(out_dtype)
+        b = self.b_transpose.to(out_dtype)
+        inner = torch.matmul(x, a)
         batch_shape = outputs.shape[:-1]
-        outputs_f = outputs.flatten(end_dim=-2)
-        result = torch.addmm(
-            outputs_f.to(x.dtype), x, self.b_transpose, alpha=self.scale
-        )
-        return result.to(outputs.dtype).reshape(*batch_shape, -1)
+        return torch.addmm(
+            outputs.flatten(end_dim=-2),
+            inner.flatten(end_dim=-2),
+            b,
+            alpha=self.scale,
+        ).reshape(*batch_shape, -1)
 
     _lora_mod.LoRA._transform_outputs_impl = _transform_outputs_impl
     _LORA_DTYPE_PATCH_APPLIED = True

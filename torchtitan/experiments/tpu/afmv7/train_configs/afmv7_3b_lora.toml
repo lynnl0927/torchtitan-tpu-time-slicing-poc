@@ -62,11 +62,11 @@ enable_amp = true
 use_loss_kernel = true
 use_splash_attention_kernel = true
 use_graph_split = true
-force_lora_parameter_ddp = true
+force_lora_parameter_ddp = false
 sa_block_q = 2048
 sa_block_kv = 2048
 sa_block_dkv = 2048
-sa_block_kv_compute = 2048
+sa_block_kv_compute = 1024
 sa_block_q_dkv = 2048
 sa_block_kv_dkv = 2048
 sa_block_kv_dkv_compute = 2048
@@ -75,6 +75,9 @@ sa_block_kv_dq = 2048
 compile_mode = "layer"
 enable_manual_ddp = false
 use_simple_fsdp = false
+lora_rank=16
+lora_dtype="float32"
+loss_b_block_size = 2048
 
 [checkpoint]
 enable = false
