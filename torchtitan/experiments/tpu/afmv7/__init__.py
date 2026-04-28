@@ -69,6 +69,21 @@ afmv7_args = {
         lora_alpha=4.0,
         lora_dtype="float32",
     ),
+    # Medium model for faster iteration on Sparse Core tests.
+    "medium-lora": AFMTextV7ModelArgs(
+        vocab_size=2048,
+        hidden_dim=1024,
+        num_layers=12,
+        num_kv_reuse_layers=3,
+        num_heads=8,
+        num_kv_heads=2,
+        hidden_dim_scale_factor=3.25,
+        rope_theta=500000.0,
+        use_lora=True,
+        lora_rank=16,
+        lora_alpha=16.0,
+        lora_dtype="float32",
+    ),
     # Production 3B model with LoRA fine-tuning (matching the sample script).
     "3B-lora": AFMTextV7ModelArgs(
         vocab_size=153600,
