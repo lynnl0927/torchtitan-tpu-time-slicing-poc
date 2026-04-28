@@ -43,7 +43,7 @@ seq_len = 8192
 max_norm = 1.0
 steps = 20
 dataset = "c4_test"
-dtype = "bfloat16"
+dtype = "float32"
 mixed_precision_param = "bfloat16"
 
 [parallelism]
@@ -73,6 +73,7 @@ sa_block_kv_dq = 2048
 compile_mode = "layer"
 enable_manual_ddp = true
 use_lora = true
+lora_dtype="float32"
 eager_mode = "DEFER_AND_FUSE"
 loss_b_block_size = 2048
 loss_h_block_size = 256

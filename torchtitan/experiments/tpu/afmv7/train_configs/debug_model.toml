@@ -63,6 +63,7 @@ mode = "full"  # ["none", "full"] — uses TAMM's checkpoint_activations()
 
 [compile]
 enable = false
+backend = "tpu"
 components = ["model", "loss"]
 
 [validation]

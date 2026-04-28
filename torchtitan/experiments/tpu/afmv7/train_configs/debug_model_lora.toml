@@ -37,7 +37,7 @@ min_lr_factor = 0.0
 
 [training]
 local_batch_size = 2
-seq_len = 32
+seq_len = 128
 max_norm = 1.0
 steps = 10
 dataset = "c4_test"
@@ -59,6 +59,7 @@ use_splash_attention_kernel = true
 use_graph_split = true
 enable_amp = false
 use_lora = true
+lora_dtype = "float32"
 
 [checkpoint]
 enable = false
@@ -70,6 +71,7 @@ mode = "full"  # ["none", "full"] — uses TAMM's checkpoint_activations()
 
 [compile]
 enable = false
+backend = "tpu"
 components = ["model", "loss"]
 
 [validation]
