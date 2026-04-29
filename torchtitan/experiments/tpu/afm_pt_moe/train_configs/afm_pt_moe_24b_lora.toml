@@ -1,0 +1,102 @@
+[job]
+dump_folder = "./outputs"
+description = "AFM PT MoE 24B LoRA training"
+
+[profiling]
+enable_profiling = false
+save_traces_folder = "profile_trace"
+profile_freq = 19
+profiler_active = 3
+enable_memory_snapshot = false
+save_memory_snapshot_folder = "memory_snapshot"
+
+[metrics]
+log_freq = 5
+enable_tensorboard = false
+save_tb_folder = "tb"
+enable_wandb = false
+
+[model]
+name = "afm_pt_moe_tpu"
+flavor = "24b-lora"
+# For production, set this to the AFM SentencePiece .model file or a directory
+# containing one (vocab_size=262000). The default below uses the built-in HF
+# test tokenizer (vocab_size=2002) as a dummy — token IDs are valid indices in
+# the embedding so it won't crash, but tokenization is meaningless.
+hf_assets_path = "./tests/assets/tokenizer"
+
+[optimizer]
+name = "AdamW"
+lr = 3e-4
+eps = 1e-8
+implementation = "foreach"
+
+[lr_scheduler]
+warmup_steps = 10
+decay_ratio = 0.8
+decay_type = "linear"
+min_lr_factor = 0.1
+
+[training]
+local_batch_size = 4
+seq_len = 8192
+max_norm = 1.0
+steps = 20
+dataset = "c4_test"
+dtype = "bfloat16"
+mixed_precision_param = "bfloat16"
+
+[parallelism]
+data_parallel_replicate_degree = 1
+data_parallel_shard_degree = -1
+fsdp_reshard_after_forward = "never"
+tensor_parallel_degree = 1
+enable_async_tensor_parallel = false
+pipeline_parallel_degree = 1
+context_parallel_degree = 1
+
+[tpu_config]
+use_lora = true
+eager_mode = "DEFER_AND_FUSE"
+enable_amp = true
+use_loss_kernel = true
+use_splash_attention_kernel = true
+use_graph_split = true
+force_lora_parameter_ddp = false
+sa_block_q = 2048
+sa_block_kv = 2048
+sa_block_dkv = 2048
+sa_block_kv_compute = 1024
+sa_block_q_dkv = 2048
+sa_block_kv_dkv = 2048
+sa_block_kv_dkv_compute = 2048
+sa_block_q_dq = 2048
+sa_block_kv_dq = 2048
+compile_mode = "layer"
+enable_manual_ddp = false
+use_simple_fsdp = false
+lora_rank = 16
+lora_dtype = "float32"
+loss_b_block_size = 2048
+
+[checkpoint]
+enable = false
+folder = "checkpoint"
+interval = 500
+last_save_model_only = true
+export_dtype = "float32"
+async_mode = "disabled"
+
+[activation_checkpoint]
+mode = "full"
+
+[compile]
+enable = false
+backend = "tpu"
+components = ["model", "loss"]
+
+[validation]
+enable = false
+dataset = "c4_test"
+freq = 500
+steps = 10

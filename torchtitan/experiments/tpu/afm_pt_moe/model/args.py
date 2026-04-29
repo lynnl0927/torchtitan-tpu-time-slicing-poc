@@ -26,8 +26,42 @@ class AFMPTMoeModelArgs(BaseModelArgs):
     num_experts: int = 40
     num_experts_per_token: int = 2
 
+    # Optional TAMM AFMParallelTrackMoEConfig fields. Default `None` means
+    # "omit the kwarg so TAMM's own default applies"; set explicitly on a
+    # flavor that needs to pin a specific architectural choice (e.g. mixed
+    # local/global attention pattern, RMSNorm variant, sdpa backend).
+    attention_layer_pattern: Optional[list[str]] = None
+    feed_forward_layer_pattern: Optional[list[str]] = None
+    local_attention_window_size: Optional[int] = None
+    norm_eps: Optional[float] = None
+    scale_qk_norm: Optional[bool] = None
+    pre_norm: Optional[str] = None
+    pre_residual_norm: Optional[str] = None
+    tracks_combine_norm: Optional[str] = None
+    tracks_combine_op: Optional[str] = None
+    tracks_dispatch_norm: Optional[str] = None
+    sdpa_implementation: Optional[str] = None
+    experts_router_logits_cap: Optional[float] = None
+
+    # LoRA fine-tuning (disabled by default → full parameter training).
+    # When use_lora=True, all base model parameters are frozen and only the
+    # LoRA adapter parameters are trained. Mirrors the afmv7 wrapper's LoRA
+    # surface; see model.py for which TAMM modules get adapters injected.
+    use_lora: bool = False
+    lora_rank: int = 16
+    lora_alpha: float = 16.0
+    lora_dtype: str = "bfloat16"
+
     def update_from_config(self, job_config: JobConfig, **kwargs) -> None:
-        pass
+        # Let `tpu_config.*` flags in the toml override the flavor's LoRA
+        # defaults — same pattern as afmv7's wrapper. Imported lazily to keep
+        # this module free of TPUJobConfig dependency at import time.
+        from torchtitan.experiments.tpu.tpu_job_config import TPUJobConfig
+        if isinstance(job_config, TPUJobConfig):
+            self.use_lora = job_config.tpu_config.use_lora
+            self.lora_rank = job_config.tpu_config.lora_rank
+            self.lora_alpha = job_config.tpu_config.lora_alpha
+            self.lora_dtype = job_config.tpu_config.lora_dtype
 
     def get_nparams_and_flops(
         self, model: nn.Module, seq_len: int

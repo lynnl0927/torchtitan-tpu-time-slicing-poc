@@ -41,7 +41,7 @@ seq_len = 32
 max_norm = 1.0
 steps = 10
 dataset = "c4_test"
-dtype = "bfloat16"
+dtype = "float32"
 mixed_precision_param = "bfloat16"
 
 [parallelism]
