@@ -9,6 +9,7 @@ import tamm.models.afm_text
 from .sharding import sharding_map_original
 from .sharding import sharding_map_scan
 from .sharding import sharding_map_scan_lora
+from .sharding import sharding_map_scan_lora_ddp
 from .sharding import sharding_map_scan_moe
 
 try:
@@ -40,7 +41,16 @@ torch.nn.init.normal_ = _patched_normal_
 def _patched_transform_outputs_impl(
     self, x: torch.Tensor, outputs: torch.Tensor
 ) -> torch.Tensor:
-  return outputs + ((x @ self.a_transpose) * self.scale) @ self.b_transpose
+  # Cast fp32 LoRA params down to activation dtype so the matmul chain runs
+  # in bf16 with native fp32 accumulation on the MXU. Without these casts,
+  # `x @ self.a_transpose` auto-promotes the large activation to fp32 (since
+  # a_transpose is fp32), doubling the memory traffic and halving the
+  # matmul throughput. The small R×H param downcasts are cheap; accumulation
+  # stays fp32 inside the MXU even with bf16 inputs.
+  out_dtype = outputs.dtype
+  a = self.a_transpose.to(out_dtype) if self.a_transpose.dtype != out_dtype else self.a_transpose
+  b = self.b_transpose.to(out_dtype) if self.b_transpose.dtype != out_dtype else self.b_transpose
+  return outputs + ((x @ a) * self.scale) @ b
 
 
 # pylint: disable=protected-access
@@ -54,6 +64,7 @@ __all__ = [
     'sharding_map_original',
     'sharding_map_scan',
     'sharding_map_scan_lora',
+    'sharding_map_scan_lora_ddp',
     'sharding_map_scan_moe',
     'args',
     'model',

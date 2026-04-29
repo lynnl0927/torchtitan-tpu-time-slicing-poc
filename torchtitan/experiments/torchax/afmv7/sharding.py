@@ -167,3 +167,43 @@ sharding_map_scan_lora = {
 }
 
 sharding_map_scan_moe = {}
+
+
+# Hybrid DDP(core) + DDP(LoRA) map. All weights replicated across chips; only
+# the input batch is sharded on the fsdp axis. Peak weight memory is lower
+# than FSDP (no transient gathered copy per forward: shard + gather = 7.5 GB
+# per chip vs. 6 GB for straight replication on a 3B bf16 model), and all
+# per-layer all-gather collectives vanish. Use when the model fits replicated
+# on each chip — which it does for AFMv7 3B at bf16 on v6e.
+sharding_map_scan_lora_ddp = {
+    'freqs_cis': (),
+    r'.*embedding\.weight': (None, None),
+    # Scanned base-model weights: replicated on all mesh axes including the
+    # scan leading dim. (None, None, None) = replicated everywhere.
+    r'.*params.*attention___qkv_transform___(?:wrapped___)?fused_linear___weight': (None, None, None),
+    r'.*params.*attention___q_transform___(?:wrapped___)?weight': (None, None, None),
+    r'.*params.*attention___output_transform___(?:wrapped___)?weight': (None, None, None),
+    r'.*params.*feed_forward___hidden_transform___linear_0___(?:wrapped___)?weight': (None, None, None),
+    r'.*params.*feed_forward___hidden_transform___linear_1___(?:wrapped___)?weight': (None, None, None),
+    r'.*params.*feed_forward___output_transform___(?:wrapped___)?weight': (None, None, None),
+    r'.*params.*norm.*weight': (None, None),
+    # Non-scanned original layers (one per segment edge): replicated.
+    r'.*attention\.qkv_transform\.(?:wrapped\.)?fused_linear\.weight': (None, None),
+    r'.*attention\.q_transform\.(?:wrapped\.)?weight': (None, None),
+    r'.*attention\.output_transform\.(?:wrapped\.)?weight': (None, None),
+    r'.*feed_forward\.hidden_transform\.linear_0\.(?:wrapped\.)?weight': (None, None),
+    r'.*feed_forward\.hidden_transform\.linear_1\.(?:wrapped\.)?weight': (None, None),
+    r'.*feed_forward\.output_transform\.(?:wrapped\.)?weight': (None, None),
+    r'.*norm\.weight': (None,),
+    r'^model\.output_transform\.weight$': (None, None),
+    # LoRA adapters: replicated (same as sharding_map_scan_lora — this is the
+    # "DDP for LoRA" behaviour that was already in place; preserved here).
+    r'.*params.*(qkv_transform|q_transform|linear_0|linear_1).*adapters.*a_transpose.*': (None, None, None),
+    r'.*params.*(qkv_transform|q_transform|linear_0|linear_1).*adapters.*b_transpose.*': (None, None, None),
+    r'.*params.*(output_transform).*adapters.*a_transpose.*': (None, None, None),
+    r'.*params.*(output_transform).*adapters.*b_transpose.*': (None, None, None),
+    r'^(?!.*params).*(qkv_transform|q_transform|linear_0|linear_1).*adapters.*a_transpose.*': (None, None),
+    r'^(?!.*params).*(qkv_transform|q_transform|linear_0|linear_1).*adapters.*b_transpose.*': (None, None),
+    r'^(?!.*params).*(output_transform).*adapters.*a_transpose.*': (None, None),
+    r'^(?!.*params).*(output_transform).*adapters.*b_transpose.*': (None, None),
+}
