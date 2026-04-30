@@ -1,9 +1,11 @@
-"""AFMv7 adhoc training script without dependency on TorchTitan."""
+"""AFM PT MoE adhoc training script without dependency on TorchTitan.
+"""
 
 import gc
 import time
 from typing import Final
 
+from absl import flags
 from jax import profiler
 import torch
 from torch import distributed as dist
@@ -12,16 +14,32 @@ from torchtitan.experiments.tpu import gmain
 from torchtitan.experiments.tpu import tpu_job_config
 from torchtitan.experiments.tpu import utils as tpu_utils
 import tamm
-import tamm.adapters
 import tamm.layers
+
+
+_SIZE = flags.DEFINE_enum(
+    "size",
+    "24b",
+    ["3b", "24b"],
+    "AFM PT MoE size variant. 3b = num_layers_per_track=4 (~3.1 B params, "
+    "comparable to afmv7-3B); 24b = num_layers_per_track=48 (production "
+    "~24.7 B). Both keep num_tracks=8, num_experts=4, attention_hidden_dim="
+    "1536, sparse_feed_forward_hidden_dim=2048 — only depth changes.",
+)
 
 
 # KEY HYPERPARAMETERS
 LOCAL_BATCH_SIZE = 1
-# OOM starting 8192
-CONTEXT_LENGTH = 4096
+# Iterating from the smallest workable shape upward. seq=8192 is the program
+# target; was OOMing the JIT staging arena in earlier TPUTrainer-driven runs.
+CONTEXT_LENGTH = 2048
 STEPS = 10
 LINEAR_SOFTMAX_LOSS_CHUNK_SIZE = 8192
+
+# Model architecture (matches the production AFM PT MoE 24B snippet; the
+# `--size=3b` flag overrides num_layers_per_track to 4).
+VOCAB_SIZE = 262000
+NUM_EXPERTS = 4
 
 PROFILE_DIR_BASE = "./traces/"
 PROFILE_START_STEP = 7
@@ -35,17 +53,6 @@ def train_step(model, inp, optimizer):
   with profiler.TraceAnnotation("fwd"):
     output = model(inp, mode="SKIP_OUTPUT_LAYER")
     hidden = output.last_hidden_state  # (B, S, H)
-
-  # with profiler.TraceAnnotation("output_transform"):
-  #     # Apply the output linear layer to the hidden states to get logits.
-  #     pred = model.output_transform(hidden)[:, :-1, :]  # (B, S-1, vocab_size)
-  #     target = inp[:, 1:]  # (B, S-1)
-  #     loss = torch.nn.functional.cross_entropy(
-  #         pred.reshape(-1, pred.shape[-1]), target.reshape(-1)
-  #     )
-
-  # with profiler.TraceAnnotation("bwd"):
-  #     loss.backward()
 
   with profiler.TraceAnnotation("chunked_loss"):
     # Targets are the next tokens: inp shifted left by 1.
@@ -103,12 +110,21 @@ def partitioned_linear_softmax_cross_entropy_loss(hidden, targets, linear):
 
 
 def start_trainer(job_config: tpu_job_config.TPUJobConfig) -> None:
+  size = _SIZE.value
+  # Both sizes share architecture except for depth. num_tracks defaults to 8
+  # (TAMM default) so total layer-equivalents = 8 * num_layers_per_track.
+  num_layers_per_track = {"3b": 4, "24b": 48}[size]
+
   print("***")
+  print(f"AFM PT MoE adhoc training (size={size})")
   print("Hyperparameters:")
   print(f"  {LOCAL_BATCH_SIZE=}")
   print(f"  {CONTEXT_LENGTH=}")
   print(f"  {STEPS=}")
   print(f"  {LINEAR_SOFTMAX_LOSS_CHUNK_SIZE=}")
+  print(f"  {VOCAB_SIZE=}")
+  print(f"  {NUM_EXPERTS=}")
+  print(f"  {num_layers_per_track=}")
   print("***\n")
 
   # Enables "tpu" to be used as device.
@@ -116,71 +132,83 @@ def start_trainer(job_config: tpu_job_config.TPUJobConfig) -> None:
 
   # Setup distributed.
   dist.init_process_group(backend="tpu_dist")
-  # Flush pending device-init XLA ops before any other device work.
-  dist.barrier()
-  # Required for b/507928994
-  torch.manual_seed(42)
 
   RANK: Final = dist.get_rank()
   WORLD_SIZE: Final = dist.get_world_size()
+
+  # Workaround for the TPU set_determinism hang (b/498659628). Without a
+  # manual seed, RNG ops on the TPU device — including the `torch.randint`
+  # input setup below and the per-param `uniform_()` initialization later —
+  # trigger cross-rank RNG-state accesses that hang the next collective.
+  # Mirrors train_minimal.py.
+  torch.manual_seed(42)
+
   PROFILE_DIR = f"{PROFILE_DIR_BASE}-{RANK}_of_{WORLD_SIZE}"
 
   # Set up input data.
   inp = torch.randint(
-      0, 153600, (LOCAL_BATCH_SIZE, CONTEXT_LENGTH), device="tpu"
+      0, VOCAB_SIZE, (LOCAL_BATCH_SIZE, CONTEXT_LENGTH), device="tpu"
   )
 
-  # Set the default type, however, the lora config has a default dtype flag that
-  # must also be set.
+  # bf16 default; AdamW master state stays fp32 by virtue of the optimizer
+  # internals (mu/nu allocated in fp32 regardless of param dtype).
   torch.set_default_dtype(torch.bfloat16)
 
-  # default values for Config args from afm_text_v7.py:
-  # vocab_size: int = 153600,
-  # hidden_dim: int = 2048,
-  # num_layers: int = 56,
-  # num_kv_reuse_layers: int = 21,
-  # num_heads: int = 16,
-  # num_kv_heads: _Optional[int] = 2,
-  # hidden_dim_scale_factor: float = 3.25,
-  config = tamm.models.afm_text.AFMTextV7.Config(
+  # Production AFM PT MoE config. Fields not specified use TAMM defaults
+  # (hidden_dim=2048, num_tracks=8, num_layers_per_track_per_sync_point=4,
+  # num_kv_heads=None ⇒ MHA, num_experts_per_token=2,
+  # dense_feed_forward_hidden_dim=5888 unused).
+  config = tamm.models.afm_text.afm_pt_moe.AFMParallelTrackMoEConfig(
       pretrained=False,
-      adapters={
-          "lora": tamm.adapters.LoRAModelAdapter(
-              rank=16,
-              alpha=16,  # common default: alpha == rank → scale of 1.0
-              dtype=torch.bfloat16,  # This is the dtype arg for lora that must also be set.
-              adapt_attention_queries=True,
-              adapt_attention_keys=True,
-              adapt_attention_values=True,
-              adapt_attention_outputs=True,
-              adapt_feed_forward_hidden_states=True,
-              adapt_feed_forward_outputs=True,
-          )
-      },
+      attention_hidden_dim=1536,
+      attention_layer_pattern=[
+          "local_rope",
+          "local_rope",
+          "local_rope",
+          "global_nope",
+      ],
+      experts_router_logits_cap=None,
+      feed_forward_layer_pattern=["sparse"],
+      local_attention_window_size=511,
+      norm_eps=1e-06,
+      num_experts=NUM_EXPERTS,
+      num_heads=12,
+      num_layers_per_track=num_layers_per_track,
+      pre_norm="pre_scale_rms_norm",
+      pre_residual_norm="rms_norm",
+      rope_theta=10000,
+      scale_qk_norm=False,
+      sparse_feed_forward_hidden_dim=2048,
+      tracks_combine_norm="pre_scale_rms_norm",
+      tracks_combine_op="sum",
+      tracks_dispatch_norm="rms_norm",
+      vocab_size=VOCAB_SIZE,
+      sdpa_implementation="native_torch",
   )
 
+  print(">>> creating model on meta device")
   with torch.device("meta"):
     model = config.create_model()
+  print(">>> done creating model on meta device")
 
-  # Freeze base model.
-  for name, param in model.named_parameters():
-    if "adapters" not in name:
-      param.requires_grad = False
+  # Activation checkpointing intentionally OMITTED — TAMM dropless MoE breaks
+  # both AC reentrancy modes (see module docstring).
 
-  # Apply AC and FSDP on layers.
-  for segment in [model.layers.segment_0, model.layers.segment_1]:
-    for module in segment.children():
-      if isinstance(module, tamm.layers.TransformerLayer):
-        module.checkpoint_activations(use_reentrant=False)
-
-  # Apply FSDP on layers per https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html#model-initialization
-  for segment in [model.layers.segment_0, model.layers.segment_1]:
-    for module in segment.children():
-      if isinstance(module, tamm.layers.TransformerLayer):
-        fsdp.fully_shard(module)
+  # Apply FSDP on each TransformerLayer. AFM PT MoE's layer iterator yields
+  # transformer layers across all parallel tracks (matches the user's
+  # standalone scripts/tamm_train_tpu.py pattern). Per-layer sharding avoids
+  # the XLA 32-bit indexing overflow that whole-model allgather hits when
+  # >2.1 B elements are gathered at once.
+  for layer in model.layers.iter_transformer_layers():
+    if hasattr(layer, "attention"):
+      fsdp.fully_shard(layer.attention)
+    if hasattr(layer, "feed_forward"):
+      fsdp.fully_shard(layer.feed_forward)
   fsdp.fully_shard(model)
 
+  print(">>> moving model to tpu device")
   model.to_empty(device="tpu")
+  print(">>> done moving model to tpu device")
 
   # TAMM weight initialization will calculate fan_in without factoring in
   # model parallelism, resulting in activation explosion.
@@ -199,9 +227,6 @@ def start_trainer(job_config: tpu_job_config.TPUJobConfig) -> None:
     print("***")
     print(f"{num_params=}")
     print(f"{num_params_requires_grad=}")
-    print(
-        f"{tamm._adapters_v1.utils.get_num_adapter_params(model)=}"
-    )
     print("dtype of layers (torch.bfloat16 skipped):")
     for name, param in model.named_parameters():
       if param.dtype != torch.bfloat16:
@@ -213,7 +238,10 @@ def start_trainer(job_config: tpu_job_config.TPUJobConfig) -> None:
       [p for p in model.parameters() if p.requires_grad], lr=1e-4
   )
 
+  print(">>> barrier before starting training")
   dist.barrier()
+  print(">>> barrier removed")
+  print(">>> starting training")
 
   # Setup metrics and traces.
   prev_split_time = time.perf_counter()

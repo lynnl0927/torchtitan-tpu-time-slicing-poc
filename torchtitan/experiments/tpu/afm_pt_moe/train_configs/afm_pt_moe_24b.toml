@@ -39,11 +39,11 @@ min_lr_factor = 0.1
 
 [training]
 local_batch_size = 1
-seq_len = 8192
+seq_len = 512
 max_norm = 1.0
 steps = 20
 dataset = "c4_test"
-dtype = "float32"  # fp32 master is REQUIRED for AFM PT MoE training. Do not change.
+dtype = "float32"
 mixed_precision_param = "bfloat16"
 enable_cpu_offload = true
 
@@ -57,9 +57,9 @@ pipeline_parallel_degree = 1
 context_parallel_degree = 1
 
 [tpu_config]
-eager_mode = "DEFER_AND_FUSE"
+eager_mode = "DEFER_NEVER"
 enable_amp = true
-use_loss_kernel = false
+use_loss_kernel = true
 use_splash_attention_kernel = true
 use_graph_split = true
 force_lora_parameter_ddp = true
@@ -86,7 +86,7 @@ export_dtype = "float32"
 async_mode = "disabled"
 
 [activation_checkpoint]
-mode = "none"
+mode = "none"  # AFM PT MoE has dual AC blockers (see parallelize.py apply_ac comment): use_reentrant=False ⇒ MoE shape mismatch on recompute; use_reentrant=True ⇒ TAMM kwargs not forwarded by reentrant checkpoint. Disable until fixed.
 
 [compile]
 # torch.compile is incompatible with TAMM dropless MoE dispatcher — Dynamo

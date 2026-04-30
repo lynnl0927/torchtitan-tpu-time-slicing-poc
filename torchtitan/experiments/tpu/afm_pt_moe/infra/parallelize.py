@@ -4,11 +4,12 @@ import torch
 from torch import nn
 from torch.distributed._composable.replicate import replicate
 from torch.distributed.device_mesh import DeviceMesh
-from torch.distributed.fsdp import CPUOffload, MixedPrecisionPolicy, fully_shard
+from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy, fully_shard
 import torchtitan.config
 import torchtitan.distributed
 from torchtitan.experiments.tpu import tpu_job_config
 from torchtitan.experiments.tpu import workarounds
+from torchtitan.experiments.tpu.afm_pt_moe.model.model import OutputMode
 from torchtitan.models.llama3.infra.parallelize import disable_fsdp_gradient_division
 from torchtitan.tools.logging import logger
 
@@ -55,7 +56,23 @@ def parallelize_afm_pt_moe(
       isinstance(job_config, tpu_job_config.TPUJobConfig)
       and job_config.tpu_config.use_loss_kernel
   ):
-    workarounds.use_output_projection_patch(model)
+    # Switch the wrapper into HIDDEN_AND_WEIGHT mode: forward returns
+    # (hidden, output_transform.weight.t()) so loss.pallas_cross_entropy_loss
+    # can run fused linear+softmax+CE without materializing the full
+    # (B, S, vocab_size) logit tensor. Mirrors afmv7's parallelize.py
+    # mechanism (workarounds.use_output_projection_patch is afmv7-specific —
+    # it monkey-patches model.output, but AFM PT MoE's LM head lives at
+    # model.output_transform; the wrapper-level OutputMode handles this
+    # uniformly without monkey-patching).
+    model._output_mode = OutputMode.HIDDEN_AND_WEIGHT
+    logger.info(
+        "Pallas loss kernel enabled for AFM PT MoE: forward returns "
+        "(hidden, output_transform.weight.t()); FSDP will keep the inner "
+        "TAMM module gathered after forward so the weight tensor stays "
+        "valid for the loss kernel."
+    )
+
+  model_output_mode = getattr(model, "_output_mode", OutputMode.LOGITS)
 
   model_compile_enabled = (
       job_config.compile.enable and "model" in job_config.compile.components
@@ -69,6 +86,10 @@ def parallelize_afm_pt_moe(
   # Note: torch.compile may not work correctly on CPU — use only on TPU/GPU.
   if model_compile_enabled:
     apply_compile(model, job_config.compile)
+
+  keep_output_weight_gathered = (
+      model_output_mode == OutputMode.HIDDEN_AND_WEIGHT
+  )
 
   if parallel_dims.fsdp_enabled:
     names = (
@@ -89,6 +110,7 @@ def parallelize_afm_pt_moe(
         cpu_offload=job_config.training.enable_cpu_offload,
         reshard_after_forward_policy=job_config.parallelism.fsdp_reshard_after_forward,
         pp_enabled=parallel_dims.pp_enabled,
+        keep_output_weight_gathered=keep_output_weight_gathered,
     )
 
     if parallel_dims.dp_replicate_enabled:
@@ -121,13 +143,18 @@ def parallelize_afm_pt_moe(
         cpu_offload=job_config.training.enable_cpu_offload,
         reshard_after_forward_policy=job_config.parallelism.fsdp_reshard_after_forward,
         pp_enabled=parallel_dims.pp_enabled,
+        keep_output_weight_gathered=keep_output_weight_gathered,
     )
 
   return model
 
 
 def apply_ac(model: nn.Module) -> None:
-  """Apply activation checkpointing via TAMM's native API."""
+  """Apply activation checkpointing via TAMM's native API.
+
+  Args:
+    model: The AFMPTMoe model.
+  """
   logger.info("Applying activation checkpointing to AFMPTMoe segments.")
   for segment in model.model.layers.children():
     for layer in segment.children():
@@ -165,6 +192,7 @@ def apply_fsdp(
     cpu_offload: bool,
     reshard_after_forward_policy: str,
     pp_enabled: bool,
+    keep_output_weight_gathered: bool = False,
 ) -> None:
   """Wrap AFMPTMoe with FSDP2 (fully_shard).
 
@@ -182,6 +210,12 @@ def apply_fsdp(
     cpu_offload: Whether to enable CPU offloading.
     reshard_after_forward_policy: Reshard after forward policy.
     pp_enabled: Whether pipeline parallelism is enabled.
+    keep_output_weight_gathered: When True, the inner TAMM module is sharded
+      with reshard_after_forward=False so output_transform.weight stays
+      gathered through the loss computation. Required when the wrapper's
+      _output_mode is HIDDEN_AND_WEIGHT (Pallas linear-softmax-CE path);
+      otherwise FSDP frees the weight after forward and the kernel receives a
+      tensor with null data_ptr.
 
   Raises:
     ValueError: If reshard_after_forward_policy is invalid.
@@ -191,7 +225,10 @@ def apply_fsdp(
   )
   fsdp_config: dict = {"mesh": dp_mesh, "mp_policy": mp_policy}
   if cpu_offload:
-    fsdp_config["cpu_offload"] = CPUOffload(offload_params=True)
+    # FSDP2 fully_shard takes `offload_policy` (CPUOffloadPolicy), not the old
+    # FSDP1 `cpu_offload` (CPUOffload) kwarg. Mismatch was a latent bug —
+    # cpu_offload was unreachable until afm_pt_moe_24b.toml enabled it.
+    fsdp_config["offload_policy"] = CPUOffloadPolicy()
 
   match reshard_after_forward_policy:
     case "always":
@@ -218,7 +255,12 @@ def apply_fsdp(
   # Shard the full TAMM model (handles embedding, norm, positional_encoding,
   # and the TiedWeightLinear output_transform which shares weights with the
   # embedding — these must be sharded together to avoid mesh conflicts).
-  fully_shard(inner, **fsdp_config, reshard_after_forward=reshard)
+  # When keep_output_weight_gathered=True (Pallas loss path), force
+  # reshard_after_forward=False so output_transform.weight stays gathered
+  # through the loss computation; the layer-level shards above still reshard
+  # under the default policy.
+  inner_reshard = False if keep_output_weight_gathered else reshard
+  fully_shard(inner, **fsdp_config, reshard_after_forward=inner_reshard)
 
   # Shard the outer wrapper.
   fully_shard(model, **fsdp_config)
