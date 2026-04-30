@@ -38,7 +38,7 @@ min_lr_factor = 0.0
 [training]
 local_batch_size = 2
 seq_len = 128
-max_norm = 1.0
+max_norm = 0 # grad norm logging and gradient clipping disabled
 steps = 10
 dataset = "c4_test"
 dtype = "bfloat16"

@@ -27,6 +27,7 @@ from torchtitan.experiments.tpu import model_annotator
 from torchtitan.experiments.tpu import utils as tpu_utils
 import torchtitan.experiments.tpu.afmv7  # trigger afmv7_tpu model registration
 from torchtitan.experiments.tpu.loss import build_cross_entropy_loss
+from torchtitan.distributed.utils import clip_grad_norm_
 import torchtitan.experiments.tpu.tpu_job_config
 import torchtitan.protocols.train_spec as train_spec_module
 from torchtitan.tools import utils
@@ -113,10 +114,12 @@ def train_step(
     targets: torch.Tensor,
     optimizer: torch.optim.Optimizer,
     loss_fn,
+    job_config: JobConfig,
     use_pallas: bool = False,
     use_chunked_loss: bool = False,
     graph_split: bool = False,
     manual_ddp: bool = False,
+    should_log: bool = False,
 ) -> torch.Tensor:
   """Single training step.
 
@@ -144,10 +147,12 @@ def train_step(
     optimizer: Optimizer for the trainable (adapter) parameters.
     loss_fn: pallas_cross_entropy_loss or
       partitioned_linear_softmax_cross_entropy_loss; unused for logits path.
+    job_config: The configuration for the training job.
     use_pallas: Enable the Pallas fused-kernel path.
     use_chunked_loss: Enable the chunked CE path.
     graph_split: Insert synchronize() between forward+loss and backward.
     manual_ddp: Enable manual DDP all-reduce in training loop.
+    should_log: Whether to log metrics in this step.
 
   Returns:
     Scalar loss tensor.
@@ -199,10 +204,18 @@ def train_step(
           torch.distributed.all_reduce(
               p.grad, op=torch.distributed.ReduceOp.AVG
           )
+  if job_config.training.max_norm > 0.0:
+    with jax_profiler.TraceAnnotation("grad_norm"):
+      grad_norm = clip_grad_norm_(
+          model.parameters(), job_config.training.max_norm
+      )
+  else:
+    grad_norm = torch.tensor(0.0)
+
   with jax_profiler.TraceAnnotation("optimizer.step"):
     optimizer.step()
 
-  return loss
+  return loss, grad_norm
 
 
 def build_random_dataloader(job_config, vocab_size, device):
@@ -525,29 +538,31 @@ def start_trainer(job_config: JobConfig) -> None:
       tokens = batch[0]["input"].to(device)
       targets = batch[1].to(device)
 
+      should_log = (step + 1) % log_freq == 0 or step == (steps - 1)
+
       with jax_profiler.TraceAnnotation("train", step_num=step):
-        loss = train_step(
+        loss, grad_norm = train_step(
             model,
             tokens,
             targets,
             optimizer,
             loss_fn,
+            job_config,
             use_pallas=use_loss_kernel,
             use_chunked_loss=use_chunked_loss,
             graph_split=use_graph_split,
             manual_ddp=is_manual_ddp,
+            should_log=should_log,
         )
 
-      if (step + 1) % log_freq == 0 or step == (steps - 1):
+      if should_log:
         with jax_profiler.TraceAnnotation("D2H", step_num=step):
           loss_cpu = loss.cpu().item()
-        should_log = True
       else:
         if use_graph_split:
           import torch_tpu._internal.sync  # pylint: disable=g-import-not-at-top
           torch_tpu._internal.sync.synchronize(loss, wait=False)
         loss_cpu = float("nan")
-        should_log = False
 
       if profiler:
         profiler.step()
@@ -578,7 +593,7 @@ def start_trainer(job_config: JobConfig) -> None:
             step + 1,
             loss_cpu / step_tokens,
             loss_cpu / step_tokens,
-            float("nan"),
+            grad_norm.item(),
             extra_metrics=extra_metrics,
         )
 
