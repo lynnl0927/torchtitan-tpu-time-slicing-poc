@@ -40,10 +40,10 @@ class AFMTextV7ModelArgs(BaseModelArgs):
       # AFMTextV7 does not take seq_len as a construction parameter;
       # the model handles variable-length inputs natively.
       if isinstance(job_config, TPUJobConfig):
-        self.use_lora = job_config.tpu_config.use_lora
-        self.lora_rank = job_config.tpu_config.lora_rank
-        self.lora_alpha = job_config.tpu_config.lora_alpha
-        self.lora_dtype = job_config.tpu_config.lora_dtype
+        self.use_lora = job_config.lora.use_lora
+        self.lora_rank = job_config.lora.lora_rank
+        self.lora_alpha = job_config.lora.lora_alpha
+        self.lora_dtype = job_config.lora.lora_dtype
 
     def get_nparams_and_flops(
         self, model: nn.Module, seq_len: int

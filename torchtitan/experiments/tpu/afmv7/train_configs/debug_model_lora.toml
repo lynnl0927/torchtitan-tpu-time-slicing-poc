@@ -54,13 +54,18 @@ pipeline_parallel_degree = 1
 context_parallel_degree = 1
 
 [tpu_config]
-use_loss_kernel = true
-use_splash_attention_kernel = true
 use_graph_split = true
 enable_amp = false
+
+[lora]
 use_lora = true
 lora_dtype = "float32"
 
+[splash_attention_kernel]
+use_splash_attention_kernel = true
+
+[loss_kernel]
+use_loss_kernel = true
 [checkpoint]
 enable = false
 folder = "checkpoint"

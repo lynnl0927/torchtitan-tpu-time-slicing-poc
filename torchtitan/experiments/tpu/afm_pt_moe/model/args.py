@@ -58,10 +58,10 @@ class AFMPTMoeModelArgs(BaseModelArgs):
         # this module free of TPUJobConfig dependency at import time.
         from torchtitan.experiments.tpu.tpu_job_config import TPUJobConfig
         if isinstance(job_config, TPUJobConfig):
-            self.use_lora = job_config.tpu_config.use_lora
-            self.lora_rank = job_config.tpu_config.lora_rank
-            self.lora_alpha = job_config.tpu_config.lora_alpha
-            self.lora_dtype = job_config.tpu_config.lora_dtype
+            self.use_lora = job_config.lora.use_lora
+            self.lora_rank = job_config.lora.lora_rank
+            self.lora_alpha = job_config.lora.lora_alpha
+            self.lora_dtype = job_config.lora.lora_dtype
 
     def get_nparams_and_flops(
         self, model: nn.Module, seq_len: int

@@ -319,23 +319,23 @@ def start_trainer(job_config: JobConfig) -> None:
 
   use_loss_kernel = (
       isinstance(job_config, TPUJobConfig)
-      and job_config.tpu_config.use_loss_kernel
+      and job_config.loss_kernel.use_loss_kernel
   )
   use_chunked_loss = (
       isinstance(job_config, TPUJobConfig)
-      and job_config.tpu_config.use_chunked_loss
+      and job_config.afmv7.use_chunked_loss
   )
   if use_loss_kernel and use_chunked_loss:
     raise ValueError(
         "use_loss_kernel and use_chunked_loss are mutually exclusive. "
-        "Pass --tpu_config.no-use_loss_kernel to disable the Pallas kernel "
-        "when using --tpu_config.use_chunked_loss."
+        "Pass --loss_kernel.no-use_loss_kernel to disable the Pallas kernel "
+        "when using --afmv7.use_chunked_loss."
     )
   is_manual_ddp = (
       parallel_dims.dp_replicate_enabled
       and not parallel_dims.fsdp_enabled
       and isinstance(job_config, TPUJobConfig)
-      and job_config.tpu_config.enable_manual_ddp
+      and job_config.afmv7.enable_manual_ddp
   )
   if is_manual_ddp:
     logger.info("Enabling manual DDP all-reduce in training loop")

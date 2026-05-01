@@ -49,12 +49,12 @@ def parallelize_afm_pt_moe(
 
   if (
       isinstance(job_config, tpu_job_config.TPUJobConfig)
-      and job_config.tpu_config.use_splash_attention_kernel
+      and job_config.splash_attention_kernel.use_splash_attention_kernel
   ):
     workarounds.use_splash_attention_patch(model)
   if (
       isinstance(job_config, tpu_job_config.TPUJobConfig)
-      and job_config.tpu_config.use_loss_kernel
+      and job_config.loss_kernel.use_loss_kernel
   ):
     # Switch the wrapper into HIDDEN_AND_WEIGHT mode: forward returns
     # (hidden, output_transform.weight.t()) so loss.pallas_cross_entropy_loss

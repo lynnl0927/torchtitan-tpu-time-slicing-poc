@@ -102,7 +102,7 @@ class AFMPTMoeWrapper(ModelProtocol):
         super().__init__(model_args)
         self._model_args = model_args
         # Default to LOGITS mode; parallelize.py flips this to HIDDEN_AND_WEIGHT
-        # when tpu_config.use_loss_kernel is True. Mirrors AFMTextV7Wrapper.
+        # when loss_kernel.use_loss_kernel is True. Mirrors AFMTextV7Wrapper.
         self._output_mode: OutputMode = OutputMode.LOGITS
 
         import tamm.models.afm_text.afm_pt_moe as afm_pt_moe

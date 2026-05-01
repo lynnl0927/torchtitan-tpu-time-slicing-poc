@@ -42,7 +42,7 @@ def _determine_parallel_strategy(parallel_dims, job_config) -> ParallelStrategy:
 
   if isinstance(job_config, tpu_job_config.TPUJobConfig):
     use_simple = job_config.tpu_config.use_simple_fsdp
-    manual_ddp = job_config.tpu_config.enable_manual_ddp
+    manual_ddp = job_config.afmv7.enable_manual_ddp
     amp = job_config.tpu_config.enable_amp
 
   if fsdp_enabled:
@@ -104,10 +104,10 @@ def parallelize_afmv7(
   enable_amp = True
   if isinstance(job_config, tpu_job_config.TPUJobConfig):
     use_splash_attention_kernel = (
-        job_config.tpu_config.use_splash_attention_kernel
+        job_config.splash_attention_kernel.use_splash_attention_kernel
     ) and tpu_utils.get_device_type() == "tpu"
     use_loss_kernel = (
-        job_config.tpu_config.use_loss_kernel
+        job_config.loss_kernel.use_loss_kernel
     ) and tpu_utils.get_device_type() == "tpu"
     enable_amp = job_config.tpu_config.enable_amp
 
@@ -115,19 +115,19 @@ def parallelize_afmv7(
     if isinstance(job_config, tpu_job_config.TPUJobConfig):
       workarounds.use_splash_attention_patch(
           model,
-          block_q=job_config.tpu_config.sa_block_q,
-          block_kv=job_config.tpu_config.sa_block_kv,
-          block_dkv=job_config.tpu_config.sa_block_dkv,
-          block_kv_compute=job_config.tpu_config.sa_block_kv_compute,
-          block_q_dkv=job_config.tpu_config.sa_block_q_dkv,
-          block_kv_dkv=job_config.tpu_config.sa_block_kv_dkv,
-          block_kv_dkv_compute=job_config.tpu_config.sa_block_kv_dkv_compute,
-          block_q_dq=job_config.tpu_config.sa_block_q_dq,
-          block_kv_dq=job_config.tpu_config.sa_block_kv_dq,
-          use_fused_bwd_kernel=job_config.tpu_config.sa_use_fused_bwd_kernel,
-          q_layout=job_config.tpu_config.sa_q_layout,
-          k_layout=job_config.tpu_config.sa_k_layout,
-          v_layout=job_config.tpu_config.sa_v_layout,
+          block_q=job_config.splash_attention_kernel.sa_block_q,
+          block_kv=job_config.splash_attention_kernel.sa_block_kv,
+          block_dkv=job_config.splash_attention_kernel.sa_block_dkv,
+          block_kv_compute=job_config.splash_attention_kernel.sa_block_kv_compute,
+          block_q_dkv=job_config.splash_attention_kernel.sa_block_q_dkv,
+          block_kv_dkv=job_config.splash_attention_kernel.sa_block_kv_dkv,
+          block_kv_dkv_compute=job_config.splash_attention_kernel.sa_block_kv_dkv_compute,
+          block_q_dq=job_config.splash_attention_kernel.sa_block_q_dq,
+          block_kv_dq=job_config.splash_attention_kernel.sa_block_kv_dq,
+          use_fused_bwd_kernel=job_config.splash_attention_kernel.sa_use_fused_bwd_kernel,
+          q_layout=job_config.splash_attention_kernel.sa_q_layout,
+          k_layout=job_config.splash_attention_kernel.sa_k_layout,
+          v_layout=job_config.splash_attention_kernel.sa_v_layout,
       )
     else:
       workarounds.use_splash_attention_patch(model)
@@ -148,7 +148,7 @@ def parallelize_afmv7(
 
   # Determine if we should force LoRA params to be DDP (ignored by FSDP)
   ignored_lora_params = (
-      lora_params if job_config.tpu_config.force_lora_parameter_ddp else None
+      lora_params if job_config.lora.force_lora_parameter_ddp else None
   )
 
   model_compile_enabled = (
@@ -271,10 +271,10 @@ def parallelize_afmv7(
 
   model.lora_params = lora_params
   model.force_lora_parameter_ddp = (
-      job_config.tpu_config.force_lora_parameter_ddp
+      job_config.lora.force_lora_parameter_ddp
   )
 
-  if job_config.tpu_config.force_lora_parameter_ddp and lora_params:
+  if job_config.lora.force_lora_parameter_ddp and lora_params:
     if parallel_dims.fsdp_enabled:
       lora_dp_mesh = parallel_dims.get_mesh(
           ["dp_replicate", "fsdp"]

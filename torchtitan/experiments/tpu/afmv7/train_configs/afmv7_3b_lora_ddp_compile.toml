@@ -57,10 +57,17 @@ context_parallel_degree = 1
 
 [tpu_config]
 enable_amp = true
-use_loss_kernel = true
-use_splash_attention_kernel = true
 use_graph_split = true
+compile_mode = "layer"
+eager_mode = "DEFER_AND_FUSE"
+
+[lora]
 force_lora_parameter_ddp = true
+use_lora = true
+lora_dtype="float32"
+
+[splash_attention_kernel]
+use_splash_attention_kernel = true
 sa_block_q = 2048
 sa_block_kv = 2048
 sa_block_dkv = 2048
@@ -70,14 +77,14 @@ sa_block_kv_dkv = 2048
 sa_block_kv_dkv_compute = 2048
 sa_block_q_dq = 2048
 sa_block_kv_dq = 2048
-compile_mode = "layer"
-enable_manual_ddp = true
-use_lora = true
-lora_dtype="float32"
-eager_mode = "DEFER_AND_FUSE"
+
+[loss_kernel]
+use_loss_kernel = true
 loss_b_block_size = 2048
 loss_h_block_size = 256
 
+[afmv7]
+enable_manual_ddp = true
 [checkpoint]
 enable = false
 folder = "checkpoint"
