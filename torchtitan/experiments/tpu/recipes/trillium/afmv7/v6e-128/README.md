@@ -51,9 +51,9 @@ xpk workload create \
     --compile.enable \
     --training.local_batch_size=4 \
     --tpu_config.use_simple_fsdp \
-    --tpu_config.force_lora_parameter_ddp \
-    --tpu_config.sa_block_kv_compute=1024 \
-    --tpu_config.loss_b_block_size=2048 \
+    --lora.force_lora_parameter_ddp \
+    --splash_attention_kernel.sa_block_kv_compute=1024 \
+    --loss_kernel.loss_b_block_size=2048 \
     --parallelism.data_parallel_replicate_degree=1 \
     --parallelism.data_parallel_shard_degree=-1"
 ```
@@ -92,7 +92,7 @@ xpk workload create \
     --training.local_batch_size=4 \
     --tpu_config.use_simple_fsdp \
     --tpu_config.eager_mode=DEFER_AND_FUSE \
-    --tpu_config.sa_block_kv_compute=1024 \
+    --splash_attention_kernel.sa_block_kv_compute=1024 \
     --parallelism.data_parallel_replicate_degree=1 \
     --parallelism.data_parallel_shard_degree=-1"
 ```

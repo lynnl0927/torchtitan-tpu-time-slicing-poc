@@ -50,8 +50,8 @@ xpk workload create \
     -m torchtitan.experiments.tpu.train \
     --job.config_file=torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b.toml \
     --compile.enable \
-    --tpu_config.sa_block_kv_compute=1024 \
-    --tpu_config.loss_b_block_size=2048"
+    --splash_attention_kernel.sa_block_kv_compute=1024 \
+    --loss_kernel.loss_b_block_size=2048"
 ```
 
 *Note: `--tpu_config.force_lora_parameter_ddp` is **not** passed on v6e-256

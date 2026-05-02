@@ -50,13 +50,13 @@ xpk workload create \
     --job.config_file=torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b_lora.toml \
     --compile.enable \
     --training.local_batch_size=2 \
-    --tpu_config.lora_rank=16 \
-    --tpu_config.lora_dtype=float32 \
-    --tpu_config.enable_manual_ddp \
-    --tpu_config.force_lora_parameter_ddp \
+    --lora.lora_rank=16 \
+    --lora.lora_dtype=float32 \
+    --lora.force_lora_parameter_ddp \
+    --afmv7.enable_manual_ddp \
     --tpu_config.no-enable_amp \
     --tpu_config.eager_mode=DEFER_AND_FUSE \
-    --tpu_config.loss_h_block_size=256 \
+    --loss_kernel.loss_h_block_size=256 \
     --parallelism.data_parallel_replicate_degree=-1 \
     --parallelism.data_parallel_shard_degree=1"
 ```
@@ -93,8 +93,8 @@ xpk workload create \
     -m torchtitan.experiments.tpu.afmv7.train_minimal \
     --job.config_file=torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b_lora.toml \
     --training.local_batch_size=4 \
-    --tpu_config.lora_rank=16 \
-    --tpu_config.lora_dtype=float32 \
+    --lora.lora_rank=16 \
+    --lora.lora_dtype=float32 \
     --tpu_config.enable_amp \
     --tpu_config.eager_mode=DEFER_AND_FUSE \
     --parallelism.data_parallel_replicate_degree=1 \
