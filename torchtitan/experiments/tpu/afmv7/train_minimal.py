@@ -9,6 +9,7 @@ Example with v6e-4 vm (yeild ~7.1k TPS / chip):
   --model.flavor=3B-lora
 """
 
+import functools
 import os
 import time
 import typing
@@ -24,6 +25,7 @@ import torchtitan.distributed
 from torchtitan.distributed import utils as dist_utils
 from torchtitan.experiments.tpu import gmain
 from torchtitan.experiments.tpu import model_annotator
+from torchtitan.experiments.tpu import profiler_workaround
 from torchtitan.experiments.tpu import utils as tpu_utils
 import torchtitan.experiments.tpu.afmv7  # trigger afmv7_tpu model registration
 from torchtitan.experiments.tpu.loss import build_cross_entropy_loss
@@ -404,6 +406,7 @@ def start_trainer(job_config: JobConfig) -> None:
   )
 
   from torchtitan.experiments.tpu.afmv7.model.model import OutputMode  # pylint: disable=g-import-not-at-top
+
   if use_loss_kernel:
     model._output_mode = OutputMode.HIDDEN_AND_WEIGHT
   elif use_chunked_loss:
@@ -511,12 +514,10 @@ def start_trainer(job_config: JobConfig) -> None:
 
   warmup_steps = job_config.lr_scheduler.warmup_steps
 
-  if utils.get_device_type() == "tpu":
-    from torchtitan.experiments.tpu import jax_profiling  # pylint: disable=g-import-not-at-top
-    maybe_enable_profiling = jax_profiling.maybe_enable_profiling
+  maybe_enable_profiling = functools.partial(
+      profiler_workaround.maybe_enable_profiling, job_config=job_config
+  )
 
-  else:
-    from torchtitan.tools.profiling import maybe_enable_profiling # pylint: disable=g-import-not-at-top
 
   ntokens_seen = 0
   with maybe_enable_profiling(
