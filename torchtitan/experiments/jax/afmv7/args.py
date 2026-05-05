@@ -5,33 +5,13 @@ the JAX model can be configured with the same arguments as the PyTorch/TAMM
 reference implementation.
 """
 
-from dataclasses import dataclass
-from typing import Optional
+import dataclasses
+from torchtitan.experiments.tpu.afmv7.model import args as tpu_args
 
 
-@dataclass
-class AFMTextV7ModelArgs:
-    """Arguments for AFMTextV7 model configuration.
-
-    Default values match the full AFMTextV7 production model.
-    """
-    # Model architecture (matching TAMM AFMTextV7.Config fields).
-    vocab_size: int = 153600
-    hidden_dim: int = 2048
-    num_layers: int = 56
-    num_kv_reuse_layers: int = 21
-    num_heads: int = 16
-    num_kv_heads: Optional[int] = 2
-    hidden_dim_scale_factor: float = 3.25
-    rope_theta: float = 500000.0
-
-    # LoRA fine-tuning (disabled by default → full parameter training).
-    # When use_lora=True, a LoRA adapter is added to every adapted layer and
-    # the training loop freezes the base weights.
-    use_lora: bool = False
-    lora_rank: int = 16
-    lora_alpha: float = 16.0
-    lora_dtype: str = "float32"
+@dataclasses.dataclass
+class AFMTextV7ModelArgs(tpu_args.AFMTextV7ModelArgs):
+    """Arguments for AFMTextV7 model configuration."""
 
     # Seq length (set from job_config.training.seq_len at construction time).
     max_seq_len: int = 8192
