@@ -39,6 +39,12 @@ class TrainTorchaxTest(parameterized.TestCase):
           config_file="torchtitan/experiments/tpu/afmv7/train_configs/debug_model_lora.toml",
           use_scan=False,
       ),
+      dict(
+          testcase_name="afm_pt_moe_tpu",
+          model_name="afm_pt_moe",
+          config_file="torchtitan/experiments/tpu/afm_pt_moe/train_configs/debug_model.toml",
+          use_scan=False,
+      ),
   ])
   def test_train_torchax(self, model_name, config_file, use_scan):
     scan_flag = (
