@@ -10,11 +10,15 @@ from jax import profiler
 import torch
 from torch import distributed as dist
 from torch.distributed import fsdp
+import torchtitan.config
 from torchtitan.experiments.tpu import gmain
 from torchtitan.experiments.tpu import tpu_job_config
 from torchtitan.experiments.tpu import utils as tpu_utils
 import tamm
 import tamm.layers
+
+
+TORCH_DTYPE_MAP = torchtitan.config.TORCH_DTYPE_MAP
 
 
 _SIZE = flags.DEFINE_enum(
@@ -28,12 +32,12 @@ _SIZE = flags.DEFINE_enum(
 )
 
 
-# KEY HYPERPARAMETERS
-LOCAL_BATCH_SIZE = 1
-# Iterating from the smallest workable shape upward. seq=8192 is the program
-# target; was OOMing the JIT staging arena in earlier TPUTrainer-driven runs.
-CONTEXT_LENGTH = 2048
-STEPS = 10
+# KEY HYPERPARAMETERS — local_batch_size, seq_len, and steps are now read
+# from the toml's [training] section (same as train_minimal_simple.py); the
+# old hardcoded values have been moved into the toml so a single config
+# applies to both entry points. seq=8192 is the program target; was OOMing
+# the JIT staging arena in earlier TPUTrainer-driven runs, so the toml ships
+# with seq_len=512 as the smallest workable shape.
 LINEAR_SOFTMAX_LOSS_CHUNK_SIZE = 8192
 
 # Model architecture (matches the production AFM PT MoE 24B snippet; the
@@ -115,12 +119,16 @@ def start_trainer(job_config: tpu_job_config.TPUJobConfig) -> None:
   # (TAMM default) so total layer-equivalents = 8 * num_layers_per_track.
   num_layers_per_track = {"3b": 4, "24b": 48}[size]
 
+  local_batch_size = job_config.training.local_batch_size
+  context_length = job_config.training.seq_len
+  steps = job_config.training.steps
+
   print("***")
   print(f"AFM PT MoE adhoc training (size={size})")
   print("Hyperparameters:")
-  print(f"  {LOCAL_BATCH_SIZE=}")
-  print(f"  {CONTEXT_LENGTH=}")
-  print(f"  {STEPS=}")
+  print(f"  {local_batch_size=}")
+  print(f"  {context_length=}")
+  print(f"  {steps=}")
   print(f"  {LINEAR_SOFTMAX_LOSS_CHUNK_SIZE=}")
   print(f"  {VOCAB_SIZE=}")
   print(f"  {NUM_EXPERTS=}")
@@ -147,12 +155,12 @@ def start_trainer(job_config: tpu_job_config.TPUJobConfig) -> None:
 
   # Set up input data.
   inp = torch.randint(
-      0, VOCAB_SIZE, (LOCAL_BATCH_SIZE, CONTEXT_LENGTH), device="tpu"
+      0, VOCAB_SIZE, (local_batch_size, context_length), device="tpu"
   )
 
-  # bf16 default; AdamW master state stays fp32 by virtue of the optimizer
-  # internals (mu/nu allocated in fp32 regardless of param dtype).
-  torch.set_default_dtype(torch.bfloat16)
+  default_dtype = TORCH_DTYPE_MAP[job_config.training.dtype]
+  torch.set_default_dtype(default_dtype)
+  print(f">>> set default dtype to {default_dtype}")
 
   # Production AFM PT MoE config. Fields not specified use TAMM defaults
   # (hidden_dim=2048, num_tracks=8, num_layers_per_track_per_sync_point=4,
@@ -227,9 +235,9 @@ def start_trainer(job_config: tpu_job_config.TPUJobConfig) -> None:
     print("***")
     print(f"{num_params=}")
     print(f"{num_params_requires_grad=}")
-    print("dtype of layers (torch.bfloat16 skipped):")
+    print(f"dtype of layers (default {default_dtype} skipped):")
     for name, param in model.named_parameters():
-      if param.dtype != torch.bfloat16:
+      if param.dtype != default_dtype:
         print(f"  {name}: {param.dtype}")
     print("***\n")
 
@@ -246,7 +254,7 @@ def start_trainer(job_config: tpu_job_config.TPUJobConfig) -> None:
   # Setup metrics and traces.
   prev_split_time = time.perf_counter()
 
-  for step in range(STEPS):
+  for step in range(steps):
     if step == PROFILE_START_STEP:
       print(">>> starting trace for: ", PROFILE_DIR)
       profiler.start_trace(
@@ -267,9 +275,9 @@ def start_trainer(job_config: tpu_job_config.TPUJobConfig) -> None:
     prev_split_time = current_time
     if RANK == 0:
       print(
-          f"{step=}/{STEPS=}, "
+          f"{step=}/{steps=}, "
           f"Loss: {loss_cpu:.4f}, "
-          f"TPS: {LOCAL_BATCH_SIZE * CONTEXT_LENGTH / step_time:.2f}, "
+          f"TPS: {local_batch_size * context_length / step_time:.2f}, "
           f"Step time: {step_time:.2f} seconds"
           f"{torch.tpu._get_cache_misses()=}"
       )

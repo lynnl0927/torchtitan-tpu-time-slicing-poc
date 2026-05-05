@@ -262,8 +262,5 @@ def apply_fsdp(
   inner_reshard = False if keep_output_weight_gathered else reshard
   fully_shard(inner, **fsdp_config, reshard_after_forward=inner_reshard)
 
-  # Shard the outer wrapper.
-  fully_shard(model, **fsdp_config)
-
   # Disable FSDP's automatic gradient division for all FSDP modules
   disable_fsdp_gradient_division(model)
