@@ -40,7 +40,7 @@ min_lr_factor = 0.1
 [training]
 local_batch_size = 4
 seq_len = 8192
-max_norm = 1.0
+max_norm = 0.0
 steps = 20
 dataset = "c4_test"
 dtype = "bfloat16"
@@ -84,8 +84,9 @@ sa_block_kv_dq = 2048
 use_loss_kernel = true
 loss_b_block_size = 2048
 
-[afmv7]
+[afm_pt_moe]
 enable_manual_ddp = false
+
 [checkpoint]
 enable = false
 folder = "checkpoint"

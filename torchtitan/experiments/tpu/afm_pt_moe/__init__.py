@@ -22,16 +22,16 @@ __all__ = [
 
 afm_pt_moe_args = {
     "debugmodel": AFMPTMoeModelArgs(
-        vocab_size=2048,
+        vocab_size=256,
         num_tracks=2,
         num_layers_per_track=4,
         num_layers_per_track_per_sync_point=2,
-        hidden_dim=64,
+        hidden_dim=128,
         attention_hidden_dim=64,
         dense_feed_forward_hidden_dim=256,
         sparse_feed_forward_hidden_dim=128,
-        num_heads=4,
-        num_experts=4,
+        num_heads=2,
+        num_experts=2,
     ),
     "24b": AFMPTMoeModelArgs(
         vocab_size=262000,

@@ -39,6 +39,13 @@ class AFMv7Config:
 
 
 @dataclasses.dataclass
+class AFMPTMoeConfig:
+  use_chunked_loss: bool = False
+  enable_manual_ddp: bool = False
+  use_segment_matmul_kernel: bool = False
+
+
+@dataclasses.dataclass
 class ConformerConfig:
   use_ctc_loss: bool = False
 
@@ -95,6 +102,9 @@ class LossKernelConfig:
 class TPUJobConfig(torchtitan.config.JobConfig):
   tpu_config: TPUConfig = dataclasses.field(default_factory=TPUConfig)
   afmv7: AFMv7Config = dataclasses.field(default_factory=AFMv7Config)
+  afm_pt_moe: AFMPTMoeConfig = dataclasses.field(
+      default_factory=AFMPTMoeConfig
+  )
   conformer: ConformerConfig = dataclasses.field(
       default_factory=ConformerConfig
   )

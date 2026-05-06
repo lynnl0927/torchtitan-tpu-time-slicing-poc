@@ -40,7 +40,7 @@ min_lr_factor = 0.1
 [training]
 local_batch_size = 1
 seq_len = 512
-max_norm = 1.0
+max_norm = 0.0
 steps = 20
 dataset = "c4_test"
 dtype = "float32"
@@ -59,6 +59,8 @@ context_parallel_degree = 1
 [tpu_config]
 eager_mode = "DEFER_NEVER"
 enable_amp = true
+use_loss_kernel = true
+use_splash_attention_kernel = true
 use_graph_split = true
 compile_mode = "layer"
 use_simple_fsdp = false
@@ -82,8 +84,9 @@ sa_block_kv_dq = 2048
 [loss_kernel]
 use_loss_kernel = true
 
-[afmv7]
+[afm_pt_moe]
 enable_manual_ddp = false
+
 [checkpoint]
 enable = false
 folder = "checkpoint"
@@ -93,7 +96,7 @@ export_dtype = "float32"
 async_mode = "disabled"
 
 [activation_checkpoint]
-mode = "none"  # AFM PT MoE has dual AC blockers (see parallelize.py apply_ac comment): use_reentrant=False ⇒ MoE shape mismatch on recompute; use_reentrant=True ⇒ TAMM kwargs not forwarded by reentrant checkpoint. Disable until fixed.
+mode = "none"
 
 [compile]
 # torch.compile is incompatible with TAMM dropless MoE dispatcher — Dynamo

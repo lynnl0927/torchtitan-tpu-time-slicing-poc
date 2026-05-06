@@ -1,0 +1,116 @@
+[job]
+dump_folder = "./outputs"
+description = "AFM PT MoE 3B training (sized for v6e-4 local; iterate up for v6e-8/32)"
+
+[profiling]
+enable_profiling = false
+save_traces_folder = "profile_trace"
+profile_freq = 19
+profiler_active = 3
+enable_memory_snapshot = false
+save_memory_snapshot_folder = "memory_snapshot"
+
+[metrics]
+log_freq = 1
+enable_tensorboard = false
+save_tb_folder = "tb"
+enable_wandb = false
+
+[model]
+name = "afm_pt_moe_tpu"
+flavor = "3b"
+# Same shape as 24b: production set hf_assets_path to the AFM SentencePiece
+# .model file or directory (vocab_size=262000). The default below uses the
+# built-in HF test tokenizer (vocab_size=2002) as a dummy — token IDs are
+# valid indices in the embedding so it won't crash, but tokenization is
+# meaningless.
+hf_assets_path = "./tests/assets/tokenizer"
+
+[optimizer]
+name = "AdamW"
+lr = 3e-4
+eps = 1e-8
+implementation = "foreach"
+
+[lr_scheduler]
+warmup_steps = 2
+decay_ratio = 0.8
+decay_type = "linear"
+min_lr_factor = 0.1
+
+[training]
+local_batch_size = 1
+seq_len = 512  # local v6e-4 — start small, scale up once baseline lands
+# Disable grad clipping: clip_grad_norm_ calls torch._foreach_norm which
+# materialises the FSDP-sharded grad as_strided views; that OOMs
+# from step 2 onward. Re-enable once a non-materialising clip path lands.
+max_norm = 0.0
+steps = 5
+dataset = "random"
+dtype = "float32"  # fp32 master required for AFM PT MoE training
+mixed_precision_param = "bfloat16"
+enable_cpu_offload = false  # 3B fits on v6e-4 HBM with FSDP across 4 ranks
+
+[parallelism]
+data_parallel_replicate_degree = 1
+data_parallel_shard_degree = -1
+fsdp_reshard_after_forward = "default"
+tensor_parallel_degree = 1
+enable_async_tensor_parallel = false
+pipeline_parallel_degree = 1
+context_parallel_degree = 1
+
+[tpu_config]
+eager_mode = "DEFER_AND_FUSE"
+enable_amp = true
+use_graph_split = false
+use_simple_fsdp = false
+
+[afm_pt_moe]
+# Chunked CE rather than the Pallas loss kernel for the local 3B smoke run.
+# Pallas loss requires use_splash_attention=true and the matching block sizes,
+# which adds compile-time cost on v6e-4. Switch to loss_kernel.use_loss_kernel
+# once you scale up. (Note: use_chunked_loss lives under [afmv7] per the
+# per-model-family sub-config layout origin/main introduced; afm_pt_moe reuses
+# this flag pending its own dedicated section.)
+use_chunked_loss = true
+enable_manual_ddp = false
+
+[afm_pt_moe]
+# Replace TAMM's stock segment_matmul (which calls group_sizes.tolist() and
+# deadlocks at v6e-32 multi-host) with a tokamax-backed Pallas ragged_dot
+# kernel. No-op at v6e-4 single-host but harmless.
+use_segment_matmul_kernel = false
+
+[loss_kernel]
+use_loss_kernel = false
+
+[splash_attention_kernel]
+use_splash_attention_kernel = false
+
+[lora]
+use_lora = false
+force_lora_parameter_ddp = false
+
+[checkpoint]
+enable = false
+folder = "checkpoint"
+interval = 500
+last_save_model_only = true
+export_dtype = "float32"
+async_mode = "disabled"
+
+[activation_checkpoint]
+mode = "none"  # AC dual-blocker: same as 24b — use_reentrant=False breaks MoE
+                # recompute, use_reentrant=True drops TAMM kwargs
+
+[compile]
+enable = false  # torch.compile is incompatible with TAMM dropless MoE
+backend = "tpu"
+components = ["model", "loss"]
+
+[validation]
+enable = false
+dataset = "c4_test"
+freq = 500
+steps = 10

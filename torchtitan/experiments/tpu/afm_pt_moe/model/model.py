@@ -187,7 +187,24 @@ class AFMPTMoeWrapper(ModelProtocol):
         return output.predictions
 
     def init_weights(self, buffer_device: torch.device | None = None) -> None:
-        """Initialize weights after model.to_empty(device) materializes storage."""
-        for module in self.model.modules():
-            if hasattr(module, "reset_parameters"):
-                module.reset_parameters()
+        """Initialize weights after model.to_empty(device) materializes storage.
+
+        Uses uniform_(-0.01, 0.01) rather than TAMM's reset_parameters():
+
+        1. TAMM's reset_parameters() computes fan_in without accounting for
+           FSDP parameter sharding, which causes activation explosion / NaN
+           loss when training with FSDP.
+
+        2. Hang workaround: after FSDP wraps the module, params are
+           DTensors. Calling `.uniform_()` on a DTensor enters PyTorch's
+           `_dispatch_get_local_results_slow_path`, which triggers a
+           per-param `get_rng_state` cross-rank collective. Tolerable on a
+           single host (8 ranks over ICI), but hangs on larger topologies.
+        """
+        with torch.no_grad():
+            for param in self.model.parameters():
+                local = param.to_local() if hasattr(param, "to_local") else param
+                local.uniform_(-0.01, 0.01)
+            for buffer in self.model.buffers():
+                local = buffer.to_local() if hasattr(buffer, "to_local") else buffer
+                local.fill_(0)

@@ -31,6 +31,19 @@ afmv7_args = {
         hidden_dim_scale_factor=3.25,
         rope_theta=500000.0,
     ),
+    # 3B variant: num_heads=8 instead of 16 (head_dim=2048//8=256 vs baseline 128).
+    # Per-token attention FLOPs unchanged (num_heads*head_dim is invariant);
+    # K/V projection params double; GQA grouping becomes 4 Q-heads per KV-head.
+    "3B-h8": AFMTextV7ModelArgs(
+        vocab_size=153600,
+        hidden_dim=2048,
+        num_layers=56,
+        num_kv_reuse_layers=21,
+        num_heads=8,
+        num_kv_heads=2,
+        hidden_dim_scale_factor=3.25,
+        rope_theta=500000.0,
+    ),
     # 3B model with 50k vocabulary size.
     "3B-50k": AFMTextV7ModelArgs(
         vocab_size=49152,

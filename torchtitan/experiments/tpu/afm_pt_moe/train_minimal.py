@@ -139,7 +139,7 @@ def train_step(
     Standard F.cross_entropy + loss.backward().
 
   Args:
-    model: Parallelised AFMv7 wrapper.
+    model: Parallelised AFM PT MoE wrapper.
     tokens: Input token ids, shape (B, S).
     targets: Target token ids, shape (B, S).
     optimizer: Optimizer for the trainable (adapter) parameters.
@@ -237,6 +237,22 @@ def build_random_dataloader(job_config, vocab_size, device):
     yield {"input": x[:, :-1]}, x[:, 1:]
 
 
+def _zeros_barrier(device, label: str = "") -> None:
+  """Hang-B-safe barrier (matches train_minimal.py.bak invariant).
+
+  torch_tpu's ``dist.barrier()`` picks a CPU-side context that deadlocks at
+  v6e-32 multi-host (verified 2026-05-05). all_reduce on a TPU-resident
+  zero pins the collective to the actual TPU device buffer.
+
+  CRITICAL: no ``.cpu()`` drain. Fire-and-forget — the next training-step
+  ``loss.cpu().item()`` will drain it. Hardcoded ``device="tpu"`` (no
+  index): torch_tpu ignores the index for placement, but the .bak
+  invariant uses the bare string.
+  """
+  del device, label
+  torch.distributed.all_reduce(torch.zeros(1, device="tpu"))
+
+
 def start_trainer(job_config: JobConfig) -> None:
   """Starts the training process.
 
@@ -258,8 +274,11 @@ def start_trainer(job_config: JobConfig) -> None:
         enable_cpu_backend=job_config.training.enable_cpu_offload,
         base_folder=job_config.job.dump_folder,
     )
-    # Force all ranks to flush pending device-init XLA ops
-    torch.distributed.barrier()
+    # Force all ranks to flush pending device-init XLA ops.
+    # Use _zeros_barrier (all_reduce on a TPU-resident zero, fire-and-forget) —
+    # bare dist.barrier() picks a CPU-side context and deadlocks at v6e-32
+    # multi-host. See afm_pt_moe/train_minimal.py:_zeros_barrier docstring.
+    _zeros_barrier(device, "post_init_distributed")
 
   dp_replicate = job_config.parallelism.data_parallel_replicate_degree
   dp_shard = job_config.parallelism.data_parallel_shard_degree
@@ -324,19 +343,19 @@ def start_trainer(job_config: JobConfig) -> None:
   )
   use_chunked_loss = (
       isinstance(job_config, TPUJobConfig)
-      and job_config.afmv7.use_chunked_loss  # TODO(alekseyv): create separate config
+      and job_config.afm_pt_moe.use_chunked_loss
   )
   if use_loss_kernel and use_chunked_loss:
     raise ValueError(
         "use_loss_kernel and use_chunked_loss are mutually exclusive. "
         "Pass --loss_kernel.no-use_loss_kernel to disable the Pallas kernel "
-        "when using --afmv7.use_chunked_loss."
+        "when using --afm_pt_moe.use_chunked_loss."
     )
   is_manual_ddp = (
       parallel_dims.dp_replicate_enabled
       and not parallel_dims.fsdp_enabled
       and isinstance(job_config, TPUJobConfig)
-      and job_config.afmv7.enable_manual_ddp  # TODO(alekseyv): create separate config
+      and job_config.afm_pt_moe.enable_manual_ddp
   )
   if is_manual_ddp:
     logger.info("Enabling manual DDP all-reduce in training loop")
@@ -345,6 +364,18 @@ def start_trainer(job_config: JobConfig) -> None:
       isinstance(job_config, TPUJobConfig)
       and job_config.tpu_config.use_graph_split
   )
+
+  # Apply AFM PT MoE-specific TAMM patches BEFORE model instantiation.
+  # Currently: optionally swap TAMM's stock segment_matmul (which calls
+  # group_sizes.tolist() and deadlocks at v6e-32 multi-host) for a
+  # tokamax-backed Pallas ragged_dot kernel.
+  if (
+      isinstance(job_config, TPUJobConfig)
+      and job_config.afm_pt_moe.use_segment_matmul_kernel
+  ):
+    from torchtitan.experiments.tpu.afm_pt_moe import workarounds as _afm_workarounds  # pylint: disable=g-import-not-at-top
+    _afm_workarounds.use_segment_matmul_patch()
+
   log_freq = job_config.metrics.log_freq
 
   train_spec = train_spec_module.get_train_spec(job_config.model.name)
@@ -476,7 +507,7 @@ def start_trainer(job_config: JobConfig) -> None:
     )
 
   if torch.distributed.is_initialized():
-    torch.distributed.barrier()
+    _zeros_barrier(device, "post_model_setup")
 
   steps = job_config.training.steps
   local_batch_size = job_config.training.local_batch_size

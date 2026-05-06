@@ -32,6 +32,14 @@ class TrainMinimalDistributedTest(
           tensor_parallel_degree=1,
           skip_devices=None,
       ),
+      dict(
+          testcase_name="afm_pt_moe_fsdp_segment_matmul_kernel",
+          model_name="afm_pt_moe_tpu",
+          config_file="torchtitan/experiments/tpu/afm_pt_moe/train_configs/debug_model.toml",
+          data_parallel_shard_degree=-1,
+          tensor_parallel_degree=1,
+          extra_args=["--afm_pt_moe.use_segment_matmul_kernel"],
+      ),
   ])
   def test_afm_pt_moe_train_minimal(
       self,
