@@ -67,19 +67,8 @@ use_graph_split = false
 use_simple_fsdp = false
 
 [afm_pt_moe]
-# Chunked CE rather than the Pallas loss kernel for the local 3B smoke run.
-# Pallas loss requires use_splash_attention=true and the matching block sizes,
-# which adds compile-time cost on v6e-4. Switch to loss_kernel.use_loss_kernel
-# once you scale up. (Note: use_chunked_loss lives under [afmv7] per the
-# per-model-family sub-config layout origin/main introduced; afm_pt_moe reuses
-# this flag pending its own dedicated section.)
 use_chunked_loss = true
 enable_manual_ddp = false
-
-[afm_pt_moe]
-# Replace TAMM's stock segment_matmul (which calls group_sizes.tolist() and
-# deadlocks at v6e-32 multi-host) with a tokamax-backed Pallas ragged_dot
-# kernel. No-op at v6e-4 single-host but harmless.
 use_segment_matmul_kernel = false
 
 [loss_kernel]
