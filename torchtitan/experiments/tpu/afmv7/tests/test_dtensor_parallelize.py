@@ -69,7 +69,6 @@ def _verify_fsdp2_afmv7_training_loop_worker(device: torch.device, rank: int,
 class AFMv7DTensorParallelizeTest(
         base_distributed_device_test.BaseDistributedDeviceTest):
 
-  @absltest.skip("Skipping for now reduce_scatter_tensor op issue b/511329787")
   def test_apply_fsdp_full_training_loop_equivalence_distributed(self):
     """Verifies numerical equivalence of a full training loop with FSDP2."""
     logging.info(

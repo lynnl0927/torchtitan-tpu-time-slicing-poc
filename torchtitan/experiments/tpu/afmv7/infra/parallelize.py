@@ -15,7 +15,7 @@ from torchtitan.experiments.graph_trainer.simple_fsdp import MixedPrecisionPolic
 from torchtitan.experiments.tpu import tpu_job_config
 from torchtitan.experiments.tpu import workarounds
 from torchtitan.experiments.tpu.afmv7.model.model import OutputMode
-from torchtitan.models.llama3.parallelize import disable_fsdp_gradient_division
+from torchtitan.distributed.fsdp import disable_fsdp_gradient_division
 from torchtitan.tools.logging import logger
 from torchtitan.experiments.tpu import utils as tpu_utils
 
