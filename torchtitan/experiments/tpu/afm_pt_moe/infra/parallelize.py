@@ -18,9 +18,9 @@ from torchtitan.tools.logging import logger
 def parallelize_afm_pt_moe(
     model: nn.Module,
     parallel_dims: torchtitan.distributed.ParallelDims,
-    job_config: (
+    train_config: (
         torchtitan.trainer.Trainer.Config
-        | torchtitan.experiments.tpu.tpu_job_config.TPUJobConfig
+        | torchtitan.experiments.tpu.tpu_job_config.TPUTrainerConfig
     ),
 ) -> nn.Module:
   """Apply parallelism and activation checkpointing to AFMPTMoe.
@@ -36,7 +36,7 @@ def parallelize_afm_pt_moe(
   Args:
     model: The AFMPTMoe model to parallelize.
     parallel_dims: Parallelism dimensions.
-    job_config: Job configuration.
+    train_config: Job configuration.
 
   Returns:
     The parallelized model.
@@ -49,13 +49,13 @@ def parallelize_afm_pt_moe(
     raise RuntimeError("Tensor Parallelism is not supported for AFMPTMoe yet")
 
   if (
-      isinstance(job_config, tpu_job_config.TPUJobConfig)
-      and job_config.splash_attention_kernel.use_splash_attention_kernel
+      isinstance(train_config, tpu_job_config.TPUTrainerConfig)
+      and train_config.splash_attention_kernel.use_splash_attention_kernel
   ):
     workarounds.use_splash_attention_patch(model)
   if (
-      isinstance(job_config, tpu_job_config.TPUJobConfig)
-      and job_config.loss_kernel.use_loss_kernel
+      isinstance(train_config, tpu_job_config.TPUTrainerConfig)
+      and train_config.loss_kernel.use_loss_kernel
   ):
     # Switch the wrapper into HIDDEN_AND_WEIGHT mode: forward returns
     # (hidden, output_transform.weight.t()) so loss.pallas_cross_entropy_loss
@@ -76,17 +76,17 @@ def parallelize_afm_pt_moe(
   model_output_mode = getattr(model, "_output_mode", OutputMode.LOGITS)
 
   model_compile_enabled = (
-      job_config.compile.enable and "model" in job_config.compile.components
+      train_config.compile.enable and "model" in train_config.compile.components
   )
 
   # Apply activation checkpointing via TAMM's native API.
-  if job_config.activation_checkpoint.mode != "none":
+  if train_config.activation_checkpoint.mode != "none":
     apply_ac(model)
 
   # Apply torch.compile to each TransformerLayer in both segments.
   # Note: torch.compile may not work correctly on CPU — use only on TPU/GPU.
   if model_compile_enabled:
-    apply_compile(model, job_config.compile)
+    apply_compile(model, train_config.compile)
 
   keep_output_weight_gathered = (
       model_output_mode == OutputMode.HIDDEN_AND_WEIGHT
@@ -103,13 +103,13 @@ def parallelize_afm_pt_moe(
         model,
         dp_mesh=dp_mesh,
         param_dtype=torchtitan.config.TORCH_DTYPE_MAP[
-            job_config.training.mixed_precision_param
+            train_config.training.mixed_precision_param
         ],
         reduce_dtype=torchtitan.config.TORCH_DTYPE_MAP[
-            job_config.training.mixed_precision_reduce
+            train_config.training.mixed_precision_reduce
         ],
-        cpu_offload=job_config.training.enable_cpu_offload,
-        reshard_after_forward_policy=job_config.parallelism.fsdp_reshard_after_forward,
+        cpu_offload=train_config.training.enable_cpu_offload,
+        reshard_after_forward_policy=train_config.parallelism.fsdp_reshard_after_forward,
         pp_enabled=parallel_dims.pp_enabled,
         keep_output_weight_gathered=keep_output_weight_gathered,
     )
@@ -119,7 +119,7 @@ def parallelize_afm_pt_moe(
     else:
       logger.info("Applied FSDP to the model")
 
-    if job_config.training.enable_cpu_offload:
+    if train_config.training.enable_cpu_offload:
       logger.info("Applied CPU Offloading to the model")
 
   elif parallel_dims.dp_replicate_enabled:
@@ -136,13 +136,13 @@ def parallelize_afm_pt_moe(
         model,
         dp_mesh=dp_replicate_mesh,
         param_dtype=torchtitan.config.TORCH_DTYPE_MAP[
-            job_config.training.mixed_precision_param
+            train_config.training.mixed_precision_param
         ],
         reduce_dtype=torchtitan.config.TORCH_DTYPE_MAP[
-            job_config.training.mixed_precision_reduce
+            train_config.training.mixed_precision_reduce
         ],
-        cpu_offload=job_config.training.enable_cpu_offload,
-        reshard_after_forward_policy=job_config.parallelism.fsdp_reshard_after_forward,
+        cpu_offload=train_config.training.enable_cpu_offload,
+        reshard_after_forward_policy=train_config.parallelism.fsdp_reshard_after_forward,
         pp_enabled=parallel_dims.pp_enabled,
         keep_output_weight_gathered=keep_output_weight_gathered,
     )

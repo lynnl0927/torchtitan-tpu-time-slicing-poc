@@ -62,15 +62,15 @@ class AFMPTMoeModelArgs(BaseModel.Config):
   ) -> None:
     # Let `tpu_config.*` flags in the toml override the flavor's LoRA
     # defaults — same pattern as afmv7's wrapper. Imported lazily to keep
-    # this module free of TPUJobConfig dependency at import time.
-    from torchtitan.experiments.tpu.tpu_job_config import TPUJobConfig
+    # this module free of TPUTrainerConfig dependency at import time.
+    from torchtitan.experiments.tpu.tpu_job_config import TPUTrainerConfig
 
-    job_config = trainer_config
-    if isinstance(job_config, TPUJobConfig):
-      self.use_lora = job_config.lora.use_lora
-      self.lora_rank = job_config.lora.lora_rank
-      self.lora_alpha = job_config.lora.lora_alpha
-      self.lora_dtype = job_config.lora.lora_dtype
+    train_config = trainer_config
+    if isinstance(train_config, TPUTrainerConfig):
+      self.use_lora = train_config.lora.use_lora
+      self.lora_rank = train_config.lora.lora_rank
+      self.lora_alpha = train_config.lora.lora_alpha
+      self.lora_dtype = train_config.lora.lora_dtype
 
   def get_nparams_and_flops(
       self, model: nn.Module, seq_len: int

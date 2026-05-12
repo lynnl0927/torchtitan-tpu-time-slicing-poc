@@ -113,15 +113,15 @@ def partitioned_linear_softmax_cross_entropy_loss(hidden, targets, linear):
   return total_loss, hidden_grad
 
 
-def start_trainer(job_config: tpu_job_config.TPUJobConfig) -> None:
+def start_trainer(train_config: tpu_job_config.TPUTrainerConfig) -> None:
   size = _SIZE.value
   # Both sizes share architecture except for depth. num_tracks defaults to 8
   # (TAMM default) so total layer-equivalents = 8 * num_layers_per_track.
   num_layers_per_track = {"3b": 4, "24b": 48}[size]
 
-  local_batch_size = job_config.training.local_batch_size
-  context_length = job_config.training.seq_len
-  steps = job_config.training.steps
+  local_batch_size = train_config.training.local_batch_size
+  context_length = train_config.training.seq_len
+  steps = train_config.training.steps
 
   print("***")
   print(f"AFM PT MoE adhoc training (size={size})")
@@ -158,7 +158,7 @@ def start_trainer(job_config: tpu_job_config.TPUJobConfig) -> None:
       0, VOCAB_SIZE, (local_batch_size, context_length), device="tpu"
   )
 
-  default_dtype = TORCH_DTYPE_MAP[job_config.training.dtype]
+  default_dtype = TORCH_DTYPE_MAP[train_config.training.dtype]
   torch.set_default_dtype(default_dtype)
   print(f">>> set default dtype to {default_dtype}")
 

@@ -17,8 +17,6 @@ class TrainMinimalDistributedTest(
   @parameterized.named_parameters([
       dict(
           testcase_name="afm_pt_moe_ddp",
-          _model_name="afm_pt_moe_tpu",
-          _config_file="torchtitan/experiments/tpu/afm_pt_moe/train_configs/debug_model.toml",
           data_parallel_shard_degree=1,
           data_parallel_replicate_degree=-1,
           tensor_parallel_degree=1,
@@ -26,16 +24,12 @@ class TrainMinimalDistributedTest(
       ),
       dict(
           testcase_name="afm_pt_moe_fsdp",
-          _model_name="afm_pt_moe_tpu",
-          _config_file="torchtitan/experiments/tpu/afm_pt_moe/train_configs/debug_model.toml",
           data_parallel_shard_degree=-1,
           tensor_parallel_degree=1,
           skip_devices=None,
       ),
       dict(
           testcase_name="afm_pt_moe_fsdp_segment_matmul_kernel",
-          _model_name="afm_pt_moe_tpu",
-          _config_file="torchtitan/experiments/tpu/afm_pt_moe/train_configs/debug_model.toml",
           data_parallel_shard_degree=-1,
           tensor_parallel_degree=1,
           extra_args=["--afm_pt_moe.use_segment_matmul_kernel"],
@@ -43,8 +37,6 @@ class TrainMinimalDistributedTest(
   ])
   def test_afm_pt_moe_train_minimal(
       self,
-      _model_name,
-      _config_file,
       data_parallel_shard_degree,
       tensor_parallel_degree,
       data_parallel_replicate_degree=None,
