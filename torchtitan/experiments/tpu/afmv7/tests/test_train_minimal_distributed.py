@@ -17,8 +17,6 @@ class TrainMinimalDistributedTest(
   @parameterized.named_parameters([
       dict(
           testcase_name="afmv7_ddp",
-          _model_name="afmv7_tpu",
-          _config_file="torchtitan/experiments/tpu/afmv7/train_configs/debug_model.toml",
           data_parallel_shard_degree=1,
           data_parallel_replicate_degree=-1,
           tensor_parallel_degree=1,
@@ -26,8 +24,6 @@ class TrainMinimalDistributedTest(
       ),
       dict(
           testcase_name="afmv7_fsdp",
-          _model_name="afmv7_tpu",
-          _config_file="torchtitan/experiments/tpu/afmv7/train_configs/debug_model.toml",
           data_parallel_shard_degree=-1,
           tensor_parallel_degree=1,
           skip_devices=None,
@@ -35,8 +31,6 @@ class TrainMinimalDistributedTest(
   ])
   def test_afmv7_train_minimal(
       self,
-      _model_name,
-      _config_file,
       data_parallel_shard_degree,
       tensor_parallel_degree,
       data_parallel_replicate_degree=None,

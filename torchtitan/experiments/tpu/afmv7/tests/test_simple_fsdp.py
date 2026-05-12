@@ -13,7 +13,7 @@ from torchtitan.experiments.tpu.afmv7.infra import parallelize as afmv7_parallel
 import torchtitan.experiments.tpu.afmv7 as afmv7_package
 from torchtitan.experiments.tpu.afmv7.model.model import AFMTextV7Wrapper
 import torchtitan.distributed
-from torchtitan.experiments.tpu.tpu_job_config import TPUJobConfig
+from torchtitan.experiments.tpu.tpu_job_config import TPUTrainerConfig
 
 
 
@@ -30,11 +30,11 @@ def _verify_simple_fsdp_afmv7_training_loop_worker(device: torch.device,
 
     # Apply FSDP wrapper
     def apply_fsdp_wrapper(model):
-        job_config = TPUJobConfig()
-        job_config.tpu_config.use_simple_fsdp = True
-        job_config.training.mixed_precision_param = "float32"
-        job_config.training.mixed_precision_reduce = "float32"
-        job_config.parallelism.data_parallel_shard_degree = world_size
+        train_config = TPUTrainerConfig()
+        train_config.tpu_config.use_simple_fsdp = True
+        train_config.training.mixed_precision_param = "float32"
+        train_config.training.mixed_precision_reduce = "float32"
+        train_config.parallelism.data_parallel_shard_degree = world_size
         parallel_dims = torchtitan.distributed.ParallelDims(
             dp_shard=world_size,
             dp_replicate=1,
@@ -43,7 +43,7 @@ def _verify_simple_fsdp_afmv7_training_loop_worker(device: torch.device,
             pp=1,
             ep=1,
             world_size=world_size)
-        afmv7_parallelize.parallelize_afmv7(model, parallel_dims, job_config)
+        afmv7_parallelize.parallelize_afmv7(model, parallel_dims, train_config)
 
     class CustomRunner(base_distributed_device_test.DistributedUnitTestRunner):
 

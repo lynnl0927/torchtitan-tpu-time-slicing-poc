@@ -33,7 +33,7 @@ class ParallelStrategy(Enum):
   NONE = auto()
 
 
-def _determine_parallel_strategy(parallel_dims, job_config) -> ParallelStrategy:
+def _determine_parallel_strategy(parallel_dims, train_config) -> ParallelStrategy:
   fsdp_enabled = parallel_dims.fsdp_enabled
   ddp_enabled = parallel_dims.dp_replicate_enabled
 
@@ -41,10 +41,10 @@ def _determine_parallel_strategy(parallel_dims, job_config) -> ParallelStrategy:
   manual_ddp = False
   amp = True
 
-  if isinstance(job_config, tpu_job_config.TPUJobConfig):
-    use_simple = job_config.tpu_config.use_simple_fsdp
-    manual_ddp = job_config.afmv7.enable_manual_ddp
-    amp = job_config.tpu_config.enable_amp
+  if isinstance(train_config, tpu_job_config.TPUTrainerConfig):
+    use_simple = train_config.tpu_config.use_simple_fsdp
+    manual_ddp = train_config.afmv7.enable_manual_ddp
+    amp = train_config.tpu_config.enable_amp
 
   if fsdp_enabled:
     return (
@@ -68,9 +68,9 @@ def _determine_parallel_strategy(parallel_dims, job_config) -> ParallelStrategy:
 def parallelize_afmv7(
     model: nn.Module,
     parallel_dims: torchtitan.distributed.ParallelDims,
-    job_config: (
+    train_config: (
         torchtitan.trainer.Trainer.Config
-        | torchtitan.experiments.tpu.tpu_job_config.TPUJobConfig
+        | torchtitan.experiments.tpu.tpu_job_config.TPUTrainerConfig
     ),
 ) -> nn.Module:
   """Apply parallelism and activation checkpointing to AFMTextV7.
@@ -88,7 +88,7 @@ def parallelize_afmv7(
   Args:
     model: The AFMTextV7 model to parallelize.
     parallel_dims: Parallelism dimensions.
-    job_config: Job configuration.
+    train_config: Job configuration.
 
   Returns:
     The parallelized model.
@@ -103,32 +103,32 @@ def parallelize_afmv7(
   use_splash_attention_kernel = False
   use_loss_kernel = False
   enable_amp = True
-  if isinstance(job_config, tpu_job_config.TPUJobConfig):
+  if isinstance(train_config, tpu_job_config.TPUTrainerConfig):
     use_splash_attention_kernel = (
-        job_config.splash_attention_kernel.use_splash_attention_kernel
+        train_config.splash_attention_kernel.use_splash_attention_kernel
     ) and tpu_utils.get_device_type() == "tpu"
     use_loss_kernel = (
-        job_config.loss_kernel.use_loss_kernel
+        train_config.loss_kernel.use_loss_kernel
     ) and tpu_utils.get_device_type() == "tpu"
-    enable_amp = job_config.tpu_config.enable_amp
+    enable_amp = train_config.tpu_config.enable_amp
 
   if use_splash_attention_kernel:
-    if isinstance(job_config, tpu_job_config.TPUJobConfig):
+    if isinstance(train_config, tpu_job_config.TPUTrainerConfig):
       workarounds.use_splash_attention_patch(
           model,
-          block_q=job_config.splash_attention_kernel.sa_block_q,
-          block_kv=job_config.splash_attention_kernel.sa_block_kv,
-          block_dkv=job_config.splash_attention_kernel.sa_block_dkv,
-          block_kv_compute=job_config.splash_attention_kernel.sa_block_kv_compute,
-          block_q_dkv=job_config.splash_attention_kernel.sa_block_q_dkv,
-          block_kv_dkv=job_config.splash_attention_kernel.sa_block_kv_dkv,
-          block_kv_dkv_compute=job_config.splash_attention_kernel.sa_block_kv_dkv_compute,
-          block_q_dq=job_config.splash_attention_kernel.sa_block_q_dq,
-          block_kv_dq=job_config.splash_attention_kernel.sa_block_kv_dq,
-          use_fused_bwd_kernel=job_config.splash_attention_kernel.sa_use_fused_bwd_kernel,
-          q_layout=job_config.splash_attention_kernel.sa_q_layout,
-          k_layout=job_config.splash_attention_kernel.sa_k_layout,
-          v_layout=job_config.splash_attention_kernel.sa_v_layout,
+          block_q=train_config.splash_attention_kernel.sa_block_q,
+          block_kv=train_config.splash_attention_kernel.sa_block_kv,
+          block_dkv=train_config.splash_attention_kernel.sa_block_dkv,
+          block_kv_compute=train_config.splash_attention_kernel.sa_block_kv_compute,
+          block_q_dkv=train_config.splash_attention_kernel.sa_block_q_dkv,
+          block_kv_dkv=train_config.splash_attention_kernel.sa_block_kv_dkv,
+          block_kv_dkv_compute=train_config.splash_attention_kernel.sa_block_kv_dkv_compute,
+          block_q_dq=train_config.splash_attention_kernel.sa_block_q_dq,
+          block_kv_dq=train_config.splash_attention_kernel.sa_block_kv_dq,
+          use_fused_bwd_kernel=train_config.splash_attention_kernel.sa_use_fused_bwd_kernel,
+          q_layout=train_config.splash_attention_kernel.sa_q_layout,
+          k_layout=train_config.splash_attention_kernel.sa_k_layout,
+          v_layout=train_config.splash_attention_kernel.sa_v_layout,
       )
     else:
       workarounds.use_splash_attention_patch(model)
@@ -149,25 +149,25 @@ def parallelize_afmv7(
 
   # Determine if we should force LoRA params to be DDP (ignored by FSDP)
   ignored_lora_params = (
-      lora_params if job_config.lora.force_lora_parameter_ddp else None
+      lora_params if train_config.lora.force_lora_parameter_ddp else None
   )
 
   model_compile_enabled = (
-      job_config.compile.enable and "model" in job_config.compile.components
+      train_config.compile.enable and "model" in train_config.compile.components
   )
 
   # Apply activation checkpointing via TAMM's native API.
-  if job_config.activation_checkpoint.mode != "none":
+  if train_config.activation_checkpoint.mode != "none":
     apply_ac(model)
 
   # Apply torch.compile to each TransformerLayer in both segments.
   # Note: torch.compile may not work correctly on CPU — use only on TPU/GPU.
   if model_compile_enabled:
-    apply_compile(model, job_config)
+    apply_compile(model, train_config)
 
   model_output_mode = getattr(model, "_output_mode", OutputMode.LOGITS)
 
-  strategy = _determine_parallel_strategy(parallel_dims, job_config)
+  strategy = _determine_parallel_strategy(parallel_dims, train_config)
 
   # Resolve DeviceMesh and mode based on active dimensions
   if parallel_dims.fsdp_enabled:
@@ -193,10 +193,10 @@ def parallelize_afmv7(
     if enable_amp:
       mp_policy = SimpleFSDPMixedPrecisionPolicy(
           param_dtype=torchtitan.config.TORCH_DTYPE_MAP[
-              job_config.training.mixed_precision_param
+              train_config.training.mixed_precision_param
           ],
           reduce_dtype=torchtitan.config.TORCH_DTYPE_MAP[
-              job_config.training.mixed_precision_reduce
+              train_config.training.mixed_precision_reduce
           ],
       )
     model = simple_fsdp_data_parallel(
@@ -212,13 +212,13 @@ def parallelize_afmv7(
         model,
         dp_mesh=dp_mesh,
         param_dtype=torchtitan.config.TORCH_DTYPE_MAP[
-            job_config.training.mixed_precision_param
+            train_config.training.mixed_precision_param
         ],
         reduce_dtype=torchtitan.config.TORCH_DTYPE_MAP[
-            job_config.training.mixed_precision_reduce
+            train_config.training.mixed_precision_reduce
         ],
-        cpu_offload=job_config.training.enable_cpu_offload,
-        reshard_after_forward_policy=job_config.parallelism.fsdp_reshard_after_forward,
+        cpu_offload=train_config.training.enable_cpu_offload,
+        reshard_after_forward_policy=train_config.parallelism.fsdp_reshard_after_forward,
         pp_enabled=parallel_dims.pp_enabled,
         keep_output_weight_gathered=(
             model_output_mode == OutputMode.HIDDEN_AND_WEIGHT
@@ -230,7 +230,7 @@ def parallelize_afmv7(
       logger.info("Applied HSDP to the model")
     else:
       logger.info("Applied FSDP to the model")
-    if job_config.training.enable_cpu_offload:
+    if train_config.training.enable_cpu_offload:
       logger.info("Applied CPU Offloading to the model")
 
   elif strategy == ParallelStrategy.MANUAL_DDP_HACK:
@@ -245,13 +245,13 @@ def parallelize_afmv7(
         model,
         dp_mesh=dp_mesh,
         param_dtype=torchtitan.config.TORCH_DTYPE_MAP[
-            job_config.training.mixed_precision_param
+            train_config.training.mixed_precision_param
         ],
         reduce_dtype=torchtitan.config.TORCH_DTYPE_MAP[
-            job_config.training.mixed_precision_reduce
+            train_config.training.mixed_precision_reduce
         ],
-        cpu_offload=job_config.training.enable_cpu_offload,
-        reshard_after_forward_policy=job_config.parallelism.fsdp_reshard_after_forward,
+        cpu_offload=train_config.training.enable_cpu_offload,
+        reshard_after_forward_policy=train_config.parallelism.fsdp_reshard_after_forward,
         pp_enabled=parallel_dims.pp_enabled,
         keep_output_weight_gathered=(
             model_output_mode == OutputMode.HIDDEN_AND_WEIGHT
@@ -271,10 +271,10 @@ def parallelize_afmv7(
 
   model.lora_params = lora_params
   model.force_lora_parameter_ddp = (
-      job_config.lora.force_lora_parameter_ddp
+      train_config.lora.force_lora_parameter_ddp
   )
 
-  if job_config.lora.force_lora_parameter_ddp and lora_params:
+  if train_config.lora.force_lora_parameter_ddp and lora_params:
     if parallel_dims.fsdp_enabled:
       lora_dp_mesh = parallel_dims.get_mesh(
           ["dp_replicate", "fsdp"]
@@ -360,7 +360,7 @@ def apply_ac(model: nn.Module) -> None:
 
 
 def apply_compile(
-    model: nn.Module, job_config: "torchtitan.trainer.Trainer.Config"
+    model: nn.Module, train_config: "torchtitan.trainer.Trainer.Config"
 ) -> None:
   """Apply torch.compile to each TransformerLayer, Segment or Whole Model.
 
@@ -368,22 +368,22 @@ def apply_compile(
 
   Args:
     model: The AFMTextV7 model.
-    job_config: Job configuration.
+    train_config: Job configuration.
   """
-  compile_mode = job_config.tpu_config.compile_mode
+  compile_mode = train_config.tpu_config.compile_mode
 
   inner = model.model
   if compile_mode == "whole":
     logger.info("Applying torch.compile to Whole Model.")
     model.model = torch.compile(
-        inner, backend=job_config.compile.backend, fullgraph=True, dynamic=False
+        inner, backend=train_config.compile.backend, fullgraph=True, dynamic=False
     )
   elif compile_mode == "block":
     logger.info("Applying torch.compile to AFMTextV7 Segments (Block-level).")
     for seg_id, seg in inner.layers.named_children():
       logger.info(f"Compiling segment {seg_id}")
       compiled = torch.compile(
-          seg, backend=job_config.compile.backend, fullgraph=True, dynamic=False
+          seg, backend=train_config.compile.backend, fullgraph=True, dynamic=False
       )
       inner.layers.register_module(seg_id, compiled)
   else:
@@ -394,7 +394,7 @@ def apply_compile(
       for layer_id, layer in seg.named_children():
         compiled = torch.compile(
             layer,
-            backend=job_config.compile.backend,
+            backend=train_config.compile.backend,
             fullgraph=True,
             dynamic=False,
         )

@@ -9,7 +9,7 @@ import torchtitan.experiments.tpu.tpu_job_config
 from torchtitan.protocols.model import BaseModel
 
 
-TPUJobConfig = torchtitan.experiments.tpu.tpu_job_config.TPUJobConfig
+TPUTrainerConfig = torchtitan.experiments.tpu.tpu_job_config.TPUTrainerConfig
 
 
 @dataclass(kw_only=True, slots=True)
@@ -47,7 +47,7 @@ class AFMTextV7ModelArgs(BaseModel.Config):
   ) -> None:
     # AFMTextV7 does not take seq_len as a construction parameter;
     # the model handles variable-length inputs natively.
-    if isinstance(trainer_config, TPUJobConfig):
+    if isinstance(trainer_config, TPUTrainerConfig):
       self.use_lora = trainer_config.lora.use_lora
       self.lora_rank = trainer_config.lora.lora_rank
       self.lora_alpha = trainer_config.lora.lora_alpha

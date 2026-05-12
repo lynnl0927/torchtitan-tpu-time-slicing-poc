@@ -27,11 +27,11 @@ def _verify_fsdp2_afmv7_training_loop_worker(device: torch.device, rank: int,
 
   # Apply FSDP wrapper
   def apply_fsdp_wrapper(model):
-    job_config = tpu_job_config.TPUJobConfig()
-    job_config.tpu_config.use_simple_fsdp = False
-    job_config.training.mixed_precision_param = "float32"
-    job_config.training.mixed_precision_reduce = "float32"
-    job_config.parallelism.data_parallel_shard_degree = world_size
+    train_config = tpu_job_config.TPUTrainerConfig()
+    train_config.tpu_config.use_simple_fsdp = False
+    train_config.training.mixed_precision_param = "float32"
+    train_config.training.mixed_precision_reduce = "float32"
+    train_config.parallelism.data_parallel_shard_degree = world_size
     parallel_dims = torchtitan.distributed.ParallelDims(
         dp_shard=world_size,
         dp_replicate=1,
@@ -41,7 +41,7 @@ def _verify_fsdp2_afmv7_training_loop_worker(device: torch.device, rank: int,
         ep=1,
         world_size=world_size,
     )
-    afmv7_parallelize.parallelize_afmv7(model, parallel_dims, job_config)
+    afmv7_parallelize.parallelize_afmv7(model, parallel_dims, train_config)
 
   runner = base_distributed_device_test.DistributedUnitTestRunner(
       device=device,

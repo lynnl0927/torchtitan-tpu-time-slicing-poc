@@ -4,9 +4,8 @@ Example with v6e-4 vm (yeild ~7.1k TPS / chip):
   export LIBTPU_INIT_ARGS='--xla_tpu_scoped_vmem_limit_kib=131072' && \
   torchrun --nproc_per_node=4 \
   -m torchtitan.experiments.tpu.afmv7.train_minimal \
-  --job.config_file=torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b_lora.toml \
-  --model.name=afmv7_tpu \
-  --model.flavor=3B-lora
+  --module=torchtitan.experiments.tpu.afmv7 \
+  --config=afmv7_3b_lora
 """
 
 import functools
@@ -22,25 +21,21 @@ import torchtitan.components.tokenizer
 import torchtitan.config
 import torchtitan.distributed
 from torchtitan.distributed import utils as dist_utils
+from torchtitan.distributed.utils import clip_grad_norm_
 from torchtitan.experiments.tpu import gmain
 from torchtitan.experiments.tpu import model_annotator
 from torchtitan.experiments.tpu import profiler_workaround
 from torchtitan.experiments.tpu import utils as tpu_utils
 import torchtitan.experiments.tpu.afmv7  # trigger afmv7_tpu model registration
 from torchtitan.experiments.tpu.loss import build_cross_entropy_loss
-from torchtitan.distributed.utils import clip_grad_norm_
-import torchtitan.experiments.tpu.tpu_job_config
+from torchtitan.experiments.tpu.tpu_job_config import TPUTrainerConfig
 from torchtitan.tools import utils
 import torchtitan.tools.logging
 
 
 TORCH_DTYPE_MAP = torchtitan.config.TORCH_DTYPE_MAP
-JobConfig = torchtitan.experiments.tpu.tpu_job_config.TPUTrainerConfig
 ParallelDims = torchtitan.distributed.ParallelDims
-TPUJobConfig = (
-    torchtitan.experiments.tpu.tpu_job_config.TPUJobConfig,
-    torchtitan.experiments.tpu.tpu_job_config.TPUTrainerConfig,
-)
+
 logger = torchtitan.tools.logging.logger
 
 
@@ -117,7 +112,7 @@ def train_step(
     targets: torch.Tensor,
     optimizer: torch.optim.Optimizer,
     loss_fn,
-    job_config: JobConfig,
+    train_config: TPUTrainerConfig,
     use_pallas: bool = False,
     use_chunked_loss: bool = False,
     graph_split: bool = False,
@@ -150,7 +145,7 @@ def train_step(
     optimizer: Optimizer for the trainable (adapter) parameters.
     loss_fn: pallas_cross_entropy_loss or
       partitioned_linear_softmax_cross_entropy_loss; unused for logits path.
-    job_config: The configuration for the training job.
+    train_config: The configuration for the training job.
     use_pallas: Enable the Pallas fused-kernel path.
     use_chunked_loss: Enable the chunked CE path.
     graph_split: Insert synchronize() between forward+loss and backward.
@@ -207,10 +202,10 @@ def train_step(
           torch.distributed.all_reduce(
               p.grad, op=torch.distributed.ReduceOp.AVG
           )
-  if job_config.training.max_norm > 0.0:
+  if train_config.training.max_norm > 0.0:
     with jax_profiler.TraceAnnotation("grad_norm"):
       grad_norm = clip_grad_norm_(
-          model.parameters(), job_config.training.max_norm
+          model.parameters(), train_config.training.max_norm
       )
   else:
     grad_norm = torch.tensor(0.0)
@@ -221,17 +216,18 @@ def train_step(
   return loss, grad_norm
 
 
-def build_random_dataloader(job_config, vocab_size, device):
+def build_random_dataloader(train_config, vocab_size, device):
   """Yields the same random tokens every step by generating the tensor once
+
   outside the loop. This matches the behavior of the train_adhoc.py script.
 
   Args:
-    job_config: The configuration for the training job.
+    train_config: The configuration for the training job.
     vocab_size: The size of the vocabulary.
     device: The device to put the data on.
   """
-  local_batch_size = job_config.training.local_batch_size
-  seq_len = job_config.training.seq_len
+  local_batch_size = train_config.training.local_batch_size
+  seq_len = train_config.training.seq_len
   x = torch.randint(
       0, vocab_size, (local_batch_size, seq_len + 1), device=device
   )
@@ -239,51 +235,51 @@ def build_random_dataloader(job_config, vocab_size, device):
     yield {"input": x[:, :-1]}, x[:, 1:]
 
 
-def start_trainer(job_config: JobConfig) -> None:
+def start_trainer(train_config: TPUTrainerConfig) -> None:
   """Starts the training process.
 
   Args:
-    job_config: The configuration for the training job.
+    train_config: The configuration for the training job.
   """
   rank = int(os.environ.get("RANK", 0))
   world_size = int(os.environ.get("WORLD_SIZE", 1))
 
   if rank == 0:
     torchtitan.tools.logging.init_logger()
-    job_config.maybe_log()
+    train_config.maybe_log()
 
   device = tpu_utils.get_device()
 
   if world_size > 1:
     dist_utils.init_distributed(
-        job_config.comm,
-        enable_cpu_backend=job_config.training.enable_cpu_offload,
-        base_folder=job_config.dump_folder,
+        train_config.comm,
+        enable_cpu_backend=train_config.training.enable_cpu_offload,
+        base_folder=train_config.dump_folder,
     )
     # Force all ranks to flush pending device-init XLA ops
     torch.distributed.barrier()
 
-  dp_replicate = job_config.parallelism.data_parallel_replicate_degree
-  dp_shard = job_config.parallelism.data_parallel_shard_degree
+  dp_replicate = train_config.parallelism.data_parallel_replicate_degree
+  dp_shard = train_config.parallelism.data_parallel_shard_degree
 
   if dp_replicate == -1:
     dp_shard = 1  # For full DDP, we don't want sharding
-    cp = job_config.parallelism.context_parallel_degree
-    tp = job_config.parallelism.tensor_parallel_degree
-    pp = job_config.parallelism.pipeline_parallel_degree
+    cp = train_config.parallelism.context_parallel_degree
+    tp = train_config.parallelism.tensor_parallel_degree
+    pp = train_config.parallelism.pipeline_parallel_degree
     dp_replicate = world_size // (dp_shard * cp * tp * pp)
 
   parallel_dims = ParallelDims(
       dp_shard=dp_shard,
       dp_replicate=dp_replicate,
-      cp=job_config.parallelism.context_parallel_degree,
-      tp=job_config.parallelism.tensor_parallel_degree,
-      pp=job_config.parallelism.pipeline_parallel_degree,
-      ep=job_config.parallelism.expert_parallel_degree,
+      cp=train_config.parallelism.context_parallel_degree,
+      tp=train_config.parallelism.tensor_parallel_degree,
+      pp=train_config.parallelism.pipeline_parallel_degree,
+      ep=train_config.parallelism.expert_parallel_degree,
       world_size=world_size,
   )
   logger.info("parallel_dims: %s", parallel_dims)
-  job_config.maybe_log()
+  train_config.maybe_log()
 
   # Default to 1 data worker and rank 0 for single-device training.
   batch_degree, batch_rank = 1, 0
@@ -301,7 +297,7 @@ def start_trainer(job_config: JobConfig) -> None:
       batch_degree, batch_rank = 1, 0
 
   # TODO b/498659628: Re-enable set_determinism once the hang on TPU is fixed.
-  seed = job_config.debug.seed or 42
+  seed = train_config.debug.seed or 42
   if utils.get_device_type() == "tpu":
     torch.manual_seed(seed)
     logger.info(
@@ -315,17 +311,17 @@ def start_trainer(job_config: JobConfig) -> None:
       dist_utils.set_determinism(
           parallel_dims,
           device,
-          job_config.debug,
+          train_config.debug,
           distinct_seed_mesh_dims=["pp"],
       )
 
   use_loss_kernel = (
-      isinstance(job_config, TPUJobConfig)
-      and job_config.loss_kernel.use_loss_kernel
+      isinstance(train_config, TPUTrainerConfig)
+      and train_config.loss_kernel.use_loss_kernel
   )
   use_chunked_loss = (
-      isinstance(job_config, TPUJobConfig)
-      and job_config.afmv7.use_chunked_loss
+      isinstance(train_config, TPUTrainerConfig)
+      and train_config.afmv7.use_chunked_loss
   )
   if use_loss_kernel and use_chunked_loss:
     raise ValueError(
@@ -336,70 +332,70 @@ def start_trainer(job_config: JobConfig) -> None:
   is_manual_ddp = (
       parallel_dims.dp_replicate_enabled
       and not parallel_dims.fsdp_enabled
-      and isinstance(job_config, TPUJobConfig)
-      and job_config.afmv7.enable_manual_ddp
+      and isinstance(train_config, TPUTrainerConfig)
+      and train_config.afmv7.enable_manual_ddp
   )
   if is_manual_ddp:
     logger.info("Enabling manual DDP all-reduce in training loop")
 
   use_graph_split = (
-      isinstance(job_config, TPUJobConfig)
-      and job_config.tpu_config.use_graph_split
+      isinstance(train_config, TPUTrainerConfig)
+      and train_config.tpu_config.use_graph_split
   )
-  log_freq = job_config.metrics.log_freq
+  log_freq = train_config.metrics.log_freq
 
-  assert job_config.model_spec is not None
-  model_spec = job_config.model_spec
+  assert train_config.model_spec is not None
+  model_spec = train_config.model_spec
   model_args = model_spec.model
-  model_args.update_from_config(trainer_config=job_config)
+  model_args.update_from_config(trainer_config=train_config)
 
   tokenizer = typing.cast(
       torchtitan.components.tokenizer.HuggingFaceTokenizer,
-      job_config.tokenizer.build(tokenizer_path=job_config.hf_assets_path)
+      train_config.tokenizer.build(tokenizer_path=train_config.hf_assets_path),
   )
 
-  if job_config.dataloader.dataset == "random":
+  if train_config.dataloader.dataset == "random":
     logger.info("Using random data loader instead of real dataset.")
     dataloader = build_random_dataloader(
-        job_config, model_args.vocab_size, device  # pytype: disable=attribute-error
+        train_config, model_args.vocab_size, device  # pytype: disable=attribute-error
     )
   else:
-    dataloader = job_config.dataloader.build(
+    dataloader = train_config.dataloader.build(
         dp_world_size=batch_degree,
         dp_rank=batch_rank,
         tokenizer=tokenizer,
-        seq_len=job_config.training.seq_len,
-        local_batch_size=job_config.training.local_batch_size,
+        seq_len=train_config.training.seq_len,
+        local_batch_size=train_config.training.local_batch_size,
     )
 
   logger.info(
       "Building %s %s with %s",
-      job_config.model_spec.name,
-      job_config.model_spec.flavor,
+      train_config.model_spec.name,
+      train_config.model_spec.flavor,
       model_args,
   )
 
-  metrics_processor = job_config.metrics.build(
+  metrics_processor = train_config.metrics.build(
       parallel_dims=parallel_dims,
-      dump_folder=job_config.dump_folder,
-      pp_schedule=job_config.parallelism.pipeline_parallel_schedule,
-      config_dict=job_config.to_dict(),
+      dump_folder=train_config.dump_folder,
+      pp_schedule=train_config.parallelism.pipeline_parallel_schedule,
+      config_dict=train_config.to_dict(),
       has_quantization=False,
   )
 
   with (
       torch.device("meta"),
-      utils.set_default_dtype(TORCH_DTYPE_MAP[job_config.training.dtype]),
+      utils.set_default_dtype(TORCH_DTYPE_MAP[train_config.training.dtype]),
   ):
     model = model_args.build()
 
   model_param_count, _ = model_args.get_nparams_and_flops(
-      model, job_config.training.seq_len
+      model, train_config.training.seq_len
   )
   logger.info(
       "Model %s %s size: %d total parameters",
-      job_config.model_spec.name,
-      job_config.model_spec.flavor,
+      train_config.model_spec.name,
+      train_config.model_spec.flavor,
       model_param_count,
   )
 
@@ -411,15 +407,15 @@ def start_trainer(job_config: JobConfig) -> None:
     model._output_mode = OutputMode.HIDDEN
   # else: default OutputMode.LOGITS — forward returns full logit tensor.
 
-  if job_config.training.enable_cpu_offload:
+  if train_config.training.enable_cpu_offload:
     logger.info("Materializing model on CPU for CPU offloading")
     model = model.to_empty(device="cpu")
 
   if world_size > 1:
-    model_spec.parallelize_fn(model, parallel_dims, job_config)
+    model_spec.parallelize_fn(model, parallel_dims, train_config)
 
   if use_loss_kernel:
-    loss_fn = build_cross_entropy_loss(job_config)
+    loss_fn = build_cross_entropy_loss(train_config)
     logger.info(
         "Loss: pallas_cross_entropy_loss (fused linear+CE Pallas kernel)"
     )
@@ -433,13 +429,13 @@ def start_trainer(job_config: JobConfig) -> None:
     logger.info("Loss: F.cross_entropy on full logits.")
 
   logger.info("Moving model to device %s", device)
-  if not job_config.training.enable_cpu_offload:
+  if not train_config.training.enable_cpu_offload:
     model = model.to_empty(device=device)
   with torch.no_grad():
     model.init_weights()
 
   # Enable profiling annotations only if compilation is disabled.
-  if not job_config.compile.enable and job_config.profiler.enable_profiling:
+  if not train_config.compile.enable and train_config.profiler.enable_profiling:
     model_annotator.wrap_model(model)
 
   # Build optimizer over trainable (adapter) params only.
@@ -449,28 +445,31 @@ def start_trainer(job_config: JobConfig) -> None:
       sum(p.numel() for p in trainable_params),
       model_param_count,
   )
-  if job_config.optimizer.implementation == "fused":
+  if train_config.optimizer.implementation == "fused":
     logger.warning(
         "Fused optimizer is not supported on TPU, changing to foreach."
     )
-    job_config.optimizer.implementation = "foreach"
+    train_config.optimizer.implementation = "foreach"
 
-  foreach = job_config.optimizer.implementation == "foreach"
-  fused = job_config.optimizer.implementation == "fused"
+  foreach = train_config.optimizer.implementation == "foreach"
+  fused = train_config.optimizer.implementation == "fused"
 
   optimizer = torch.optim.AdamW(
       trainable_params,
-      lr=job_config.optimizer.lr,
-      eps=job_config.optimizer.eps,
+      lr=train_config.optimizer.lr,
+      eps=train_config.optimizer.eps,
       foreach=foreach,
       fused=fused,
   )
 
-  if job_config.compile.enable and "optimizer" in job_config.compile.components:
+  if (
+      train_config.compile.enable
+      and "optimizer" in train_config.compile.components
+  ):
     logger.info("Applying torch.compile to optimizer.step")
     optimizer.step = torch.compile(
         optimizer.step,
-        backend=job_config.compile.backend,
+        backend=train_config.compile.backend,
         fullgraph=True,
         dynamic=False,
     )
@@ -478,21 +477,21 @@ def start_trainer(job_config: JobConfig) -> None:
   if torch.distributed.is_initialized():
     torch.distributed.barrier()
 
-  steps = job_config.training.steps
-  local_batch_size = job_config.training.local_batch_size
-  seq_len = job_config.training.seq_len
+  steps = train_config.training.steps
+  local_batch_size = train_config.training.local_batch_size
+  seq_len = train_config.training.seq_len
 
   # calculate model size and flops per token
   (
       model_param_count,
       num_flops_per_token,
-  ) = model_args.get_nparams_and_flops(model, job_config.training.seq_len)
+  ) = model_args.get_nparams_and_flops(model, train_config.training.seq_len)
   metrics_processor.num_flops_per_token = num_flops_per_token
 
   logger.info(
       "Model %s %s size: %s total parameters",
-      job_config.model_spec.name,
-      job_config.model_spec.flavor,
+      train_config.model_spec.name,
+      train_config.model_spec.flavor,
       model_param_count,
   )
 
@@ -510,18 +509,17 @@ def start_trainer(job_config: JobConfig) -> None:
   accumulated_time = 0.0
   accumulated_steps = 0
 
-  warmup_steps = job_config.lr_scheduler.warmup_steps
+  warmup_steps = train_config.lr_scheduler.warmup_steps
 
   maybe_enable_profiling = functools.partial(
-      profiler_workaround.maybe_enable_profiling, job_config=job_config
+      profiler_workaround.maybe_enable_profiling, job_config=train_config
   )
-
 
   ntokens_seen = 0
   with maybe_enable_profiling(
-      job_config.profiler,
+      train_config.profiler,
       global_step=0,
-      base_folder=job_config.dump_folder,
+      base_folder=train_config.dump_folder,
   ) as profiler:
     data_iterator = iter(dataloader)
     for step in range(steps):
@@ -546,7 +544,7 @@ def start_trainer(job_config: JobConfig) -> None:
             targets,
             optimizer,
             loss_fn,
-            job_config,
+            train_config,
             use_pallas=use_loss_kernel,
             use_chunked_loss=use_chunked_loss,
             graph_split=use_graph_split,

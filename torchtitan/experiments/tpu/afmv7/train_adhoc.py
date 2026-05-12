@@ -102,7 +102,7 @@ def partitioned_linear_softmax_cross_entropy_loss(hidden, targets, linear):
   return total_loss, hidden_grad
 
 
-def start_trainer(job_config: tpu_job_config.TPUJobConfig) -> None:
+def start_trainer(train_config: tpu_job_config.TPUTrainerConfig) -> None:
   print("***")
   print("Hyperparameters:")
   print(f"  {LOCAL_BATCH_SIZE=}")
