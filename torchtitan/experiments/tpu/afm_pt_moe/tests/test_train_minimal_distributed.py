@@ -17,8 +17,8 @@ class TrainMinimalDistributedTest(
   @parameterized.named_parameters([
       dict(
           testcase_name="afm_pt_moe_ddp",
-          model_name="afm_pt_moe_tpu",
-          config_file="torchtitan/experiments/tpu/afm_pt_moe/train_configs/debug_model.toml",
+          _model_name="afm_pt_moe_tpu",
+          _config_file="torchtitan/experiments/tpu/afm_pt_moe/train_configs/debug_model.toml",
           data_parallel_shard_degree=1,
           data_parallel_replicate_degree=-1,
           tensor_parallel_degree=1,
@@ -26,16 +26,16 @@ class TrainMinimalDistributedTest(
       ),
       dict(
           testcase_name="afm_pt_moe_fsdp",
-          model_name="afm_pt_moe_tpu",
-          config_file="torchtitan/experiments/tpu/afm_pt_moe/train_configs/debug_model.toml",
+          _model_name="afm_pt_moe_tpu",
+          _config_file="torchtitan/experiments/tpu/afm_pt_moe/train_configs/debug_model.toml",
           data_parallel_shard_degree=-1,
           tensor_parallel_degree=1,
           skip_devices=None,
       ),
       dict(
           testcase_name="afm_pt_moe_fsdp_segment_matmul_kernel",
-          model_name="afm_pt_moe_tpu",
-          config_file="torchtitan/experiments/tpu/afm_pt_moe/train_configs/debug_model.toml",
+          _model_name="afm_pt_moe_tpu",
+          _config_file="torchtitan/experiments/tpu/afm_pt_moe/train_configs/debug_model.toml",
           data_parallel_shard_degree=-1,
           tensor_parallel_degree=1,
           extra_args=["--afm_pt_moe.use_segment_matmul_kernel"],
@@ -43,8 +43,8 @@ class TrainMinimalDistributedTest(
   ])
   def test_afm_pt_moe_train_minimal(
       self,
-      model_name,
-      config_file,
+      _model_name,
+      _config_file,
       data_parallel_shard_degree,
       tensor_parallel_degree,
       data_parallel_replicate_degree=None,
@@ -54,12 +54,12 @@ class TrainMinimalDistributedTest(
     """Runs execution test specifically for AFM PT MoE's minimal trainer (experiments/tpu/afm_pt_moe/train_minimal.py)."""
 
     config_args = [
-        f"--model.name={model_name}",
-        f"--job.config_file={config_file}",
-        "--model.hf_assets_path=tests/assets/tokenizer",
-        "--training.dataset_path=tests/assets/c4_test",
+        "--module=torchtitan.experiments.tpu.afm_pt_moe",
+        "--config=afm_pt_moe_debugmodel",
+        "--hf_assets_path=tests/assets/tokenizer",
+        "--dataloader.dataset_path=tests/assets/c4_test",
         "--training.seq_len=128",
-        "--training.dataset=c4_test",
+        "--dataloader.dataset=c4_test",
         "--training.steps=3",
         "--training.local_batch_size=4",
     ]

@@ -1,16 +1,15 @@
 """AFMTextV7 model registration for TorchTitan TPU experiments."""
 
-from torchtitan.components.lr_scheduler import build_lr_schedulers
-from torchtitan.components.optimizer import build_optimizers
-from .tokenizer import build_afm_tokenizer
-from torchtitan.components.validate import build_validator
-from torchtitan.experiments.tpu.loss import build_cross_entropy_loss
-from torchtitan.hf_datasets.text_datasets import build_text_dataloader
-from torchtitan.protocols.train_spec import TrainSpec, register_train_spec
-
 from .infra.parallelize import parallelize_afmv7
 from .model.args import AFMTextV7ModelArgs
 from .model.model import AFMTextV7Wrapper
+from .tokenizer import AFMTokenizerWrapper
+from torchtitan.components.loss import CrossEntropyLoss
+from torchtitan.components.lr_scheduler import LRSchedulersContainer
+from torchtitan.components.optimizer import OptimizersContainer
+from torchtitan.components.validate import Validator
+from torchtitan.hf_datasets.text_datasets import HuggingFaceTextDataLoader
+from torchtitan.protocols.train_spec import register_train_spec, TrainSpec
 
 __all__ = [
     "parallelize_afmv7",
@@ -113,6 +112,7 @@ afmv7_args = {
         lora_dtype="float32",
     ),
 }
+
 # pytype: disable=wrong-arg-types
 register_train_spec(
     name="afmv7_tpu",
@@ -121,13 +121,15 @@ register_train_spec(
         model_args=afmv7_args,
         parallelize_fn=parallelize_afmv7,
         pipelining_fn=None,
-        build_optimizers_fn=build_optimizers,
-        build_lr_schedulers_fn=build_lr_schedulers,
-        build_dataloader_fn=build_text_dataloader,
-        build_tokenizer_fn=build_afm_tokenizer,
-        build_loss_fn=build_cross_entropy_loss,
-        build_validator_fn=build_validator,
+        loss_config=CrossEntropyLoss.Config(),
+        optimizer_config=OptimizersContainer.Config(lr=8e-4),
+        lr_scheduler_config=LRSchedulersContainer.Config(warmup_steps=2),
+        dataloader_config=HuggingFaceTextDataLoader.Config(dataset="c4_test"),
+        tokenizer_config=AFMTokenizerWrapper.Config(),
+        validator_config=Validator.Config(enable=True),
         state_dict_adapter=None,
     ),
 )
 # pytype: enable=wrong-arg-types
+
+

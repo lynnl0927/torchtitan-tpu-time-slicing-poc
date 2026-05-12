@@ -18,7 +18,6 @@ from typing import Tuple
 from jax import profiler as jax_profiler
 import torch
 import torch.nn.functional as F
-from torchtitan.components import metrics
 import torchtitan.components.tokenizer
 import torchtitan.config
 import torchtitan.distributed
@@ -31,15 +30,17 @@ import torchtitan.experiments.tpu.afmv7  # trigger afmv7_tpu model registration
 from torchtitan.experiments.tpu.loss import build_cross_entropy_loss
 from torchtitan.distributed.utils import clip_grad_norm_
 import torchtitan.experiments.tpu.tpu_job_config
-import torchtitan.protocols.train_spec as train_spec_module
 from torchtitan.tools import utils
 import torchtitan.tools.logging
 
 
 TORCH_DTYPE_MAP = torchtitan.config.TORCH_DTYPE_MAP
-JobConfig = torchtitan.config.JobConfig
+JobConfig = torchtitan.experiments.tpu.tpu_job_config.TPUTrainerConfig
 ParallelDims = torchtitan.distributed.ParallelDims
-TPUJobConfig = torchtitan.experiments.tpu.tpu_job_config.TPUJobConfig
+TPUJobConfig = (
+    torchtitan.experiments.tpu.tpu_job_config.TPUJobConfig,
+    torchtitan.experiments.tpu.tpu_job_config.TPUTrainerConfig,
+)
 logger = torchtitan.tools.logging.logger
 
 
@@ -257,7 +258,7 @@ def start_trainer(job_config: JobConfig) -> None:
     dist_utils.init_distributed(
         job_config.comm,
         enable_cpu_backend=job_config.training.enable_cpu_offload,
-        base_folder=job_config.job.dump_folder,
+        base_folder=job_config.dump_folder,
     )
     # Force all ranks to flush pending device-init XLA ops
     torch.distributed.barrier()
@@ -279,7 +280,6 @@ def start_trainer(job_config: JobConfig) -> None:
       tp=job_config.parallelism.tensor_parallel_degree,
       pp=job_config.parallelism.pipeline_parallel_degree,
       ep=job_config.parallelism.expert_parallel_degree,
-      etp=job_config.parallelism.expert_tensor_parallel_degree,
       world_size=world_size,
   )
   logger.info("parallel_dims: %s", parallel_dims)
@@ -348,60 +348,58 @@ def start_trainer(job_config: JobConfig) -> None:
   )
   log_freq = job_config.metrics.log_freq
 
-  train_spec = train_spec_module.get_train_spec(job_config.model.name)
-
-  model_args = train_spec.model_args[job_config.model.flavor]
-  model_args.update_from_config(job_config)
+  assert job_config.model_spec is not None
+  model_spec = job_config.model_spec
+  model_args = model_spec.model
+  model_args.update_from_config(trainer_config=job_config)
 
   tokenizer = typing.cast(
       torchtitan.components.tokenizer.HuggingFaceTokenizer,
-      train_spec.build_tokenizer_fn(job_config)
-      if train_spec.build_tokenizer_fn is not None
-      else None
+      job_config.tokenizer.build(tokenizer_path=job_config.hf_assets_path)
   )
 
-  if job_config.training.dataset == "random":
+  if job_config.dataloader.dataset == "random":
     logger.info("Using random data loader instead of real dataset.")
     dataloader = build_random_dataloader(
         job_config, model_args.vocab_size, device  # pytype: disable=attribute-error
     )
   else:
-    dataloader = train_spec.build_dataloader_fn(
+    dataloader = job_config.dataloader.build(
         dp_world_size=batch_degree,
         dp_rank=batch_rank,
         tokenizer=tokenizer,
-        job_config=job_config,
+        seq_len=job_config.training.seq_len,
+        local_batch_size=job_config.training.local_batch_size,
     )
 
   logger.info(
       "Building %s %s with %s",
-      job_config.model.name,
-      job_config.model.flavor,
+      job_config.model_spec.name,
+      job_config.model_spec.flavor,
       model_args,
   )
 
-  build_metrics_processor_fn = (
-      metrics.build_metrics_processor
-      if train_spec.build_metrics_processor_fn is None
-      else train_spec.build_metrics_processor_fn
-  )
-  metrics_processor = build_metrics_processor_fn(
-      job_config, parallel_dims, model_args
+  metrics_processor = job_config.metrics.build(
+      parallel_dims=parallel_dims,
+      dump_folder=job_config.dump_folder,
+      pp_schedule=job_config.parallelism.pipeline_parallel_schedule,
+      config_dict=job_config.to_dict(),
+      has_quantization=False,
   )
 
   with (
       torch.device("meta"),
       utils.set_default_dtype(TORCH_DTYPE_MAP[job_config.training.dtype]),
   ):
-    model = typing.cast(torch.nn.Module, train_spec.model_cls(model_args))
+    model = model_args.build()
 
   model_param_count, _ = model_args.get_nparams_and_flops(
       model, job_config.training.seq_len
   )
   logger.info(
       "Model %s %s size: %d total parameters",
-      job_config.model.name,
-      job_config.model.flavor,
+      job_config.model_spec.name,
+      job_config.model_spec.flavor,
       model_param_count,
   )
 
@@ -418,7 +416,7 @@ def start_trainer(job_config: JobConfig) -> None:
     model = model.to_empty(device="cpu")
 
   if world_size > 1:
-    train_spec.parallelize_fn(model, parallel_dims, job_config)
+    model_spec.parallelize_fn(model, parallel_dims, job_config)
 
   if use_loss_kernel:
     loss_fn = build_cross_entropy_loss(job_config)
@@ -441,7 +439,7 @@ def start_trainer(job_config: JobConfig) -> None:
     model.init_weights()
 
   # Enable profiling annotations only if compilation is disabled.
-  if not job_config.compile.enable and job_config.profiling.enable_profiling:
+  if not job_config.compile.enable and job_config.profiler.enable_profiling:
     model_annotator.wrap_model(model)
 
   # Build optimizer over trainable (adapter) params only.
@@ -493,8 +491,8 @@ def start_trainer(job_config: JobConfig) -> None:
 
   logger.info(
       "Model %s %s size: %s total parameters",
-      job_config.model.name,
-      job_config.model.flavor,
+      job_config.model_spec.name,
+      job_config.model_spec.flavor,
       model_param_count,
   )
 
@@ -521,9 +519,9 @@ def start_trainer(job_config: JobConfig) -> None:
 
   ntokens_seen = 0
   with maybe_enable_profiling(
-      job_config.profiling,
+      job_config.profiler,
       global_step=0,
-      base_folder=job_config.job.dump_folder,
+      base_folder=job_config.dump_folder,
   ) as profiler:
     data_iterator = iter(dataloader)
     for step in range(steps):

@@ -9,19 +9,18 @@ from torch.nn import attention
 from torchtitan.experiments.tpu import base_device_test
 from torchtitan.experiments.tpu import workarounds
 from torchtitan.experiments.tpu.kernels import linear_softmax_cross_entropy_loss as loss_kernel
-import torchtitan.experiments.tpu.afmv7  # trigger afmv7_tpu model registration
-import torchtitan.protocols.train_spec as train_spec_module
+import torchtitan.experiments.tpu.afmv7 as afmv7_package
+from torchtitan.experiments.tpu.afmv7.model import model as afmv7_model
 
 
 class KernelNumericsTest(base_device_test.BaseAcceleratorDeviceTest):
   """Tests for custom kernels on the AFMv7 model."""
 
   def _get_dummy_model(self):
-    train_spec = train_spec_module.get_train_spec("afmv7_tpu")
-    model_args = train_spec.model_args["debugmodel"]
+    model_args = afmv7_package.afmv7_args["debugmodel"]
     # Ensure LoRA is disabled for standard testing
     model_args.use_lora = False
-    model = train_spec.model_cls(model_args).to(self.accelerator_device)
+    model = afmv7_model.AFMTextV7Wrapper(model_args).to(self.accelerator_device)
     # Materialize weights
     model.init_weights()
     return model

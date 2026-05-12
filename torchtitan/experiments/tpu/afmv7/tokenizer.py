@@ -1,11 +1,13 @@
 """AFMTextV7 tokenizer wrapper for TorchTitan."""
 
-import os as os
+import os
 
-from torchtitan.components.tokenizer import BaseTokenizer, build_hf_tokenizer
-from torchtitan.config import JobConfig
+from torchtitan.components.tokenizer import BaseTokenizer
+from torchtitan.config import Configurable
 from torchtitan.tools.logging import logger
 
+
+from dataclasses import dataclass
 
 class AFMTokenizerWrapper(BaseTokenizer):
     """Wraps TAMM's AFMTokenizer as a TorchTitan BaseTokenizer.
@@ -16,6 +18,15 @@ class AFMTokenizerWrapper(BaseTokenizer):
     Args:
         vocab_path: Path to the SentencePiece ``.model`` vocabulary file.
     """
+
+    @dataclass(kw_only=True, slots=True)
+    class Config(BaseTokenizer.Config):
+        def build(self, *, tokenizer_path: str) -> "AFMTokenizerWrapper":
+            if _is_hf_tokenizer_dir(tokenizer_path):
+                from torchtitan.components.tokenizer import HuggingFaceTokenizer
+                return HuggingFaceTokenizer(tokenizer_path=tokenizer_path)
+            vocab_path = _resolve_vocab_path(tokenizer_path)
+            return AFMTokenizerWrapper(vocab_path=vocab_path)
 
     def __init__(self, vocab_path: str) -> None:
         super().__init__()
@@ -43,7 +54,7 @@ class AFMTokenizerWrapper(BaseTokenizer):
         return len(self._tok)
 
 
-def build_afm_tokenizer(job_config: JobConfig) -> BaseTokenizer:
+def build_afm_tokenizer(job_config: Configurable.Config) -> BaseTokenizer:
     """Build a tokenizer from job_config.model.hf_assets_path.
 
     The path should point to either:
@@ -57,7 +68,8 @@ def build_afm_tokenizer(job_config: JobConfig) -> BaseTokenizer:
     path = job_config.model.hf_assets_path
     if _is_hf_tokenizer_dir(path):
         logger.info(f"No SentencePiece .model found in {path}; falling back to HF tokenizer")
-        return build_hf_tokenizer(job_config)
+        from torchtitan.components.tokenizer import HuggingFaceTokenizer
+        return HuggingFaceTokenizer(tokenizer_path=path)
     vocab_path = _resolve_vocab_path(path)
     logger.info(f"Loading AFM tokenizer from {vocab_path}")
     return AFMTokenizerWrapper(vocab_path=vocab_path)

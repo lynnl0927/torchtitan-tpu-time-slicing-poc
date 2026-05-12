@@ -9,12 +9,13 @@ from torch.distributed.fsdp import CPUOffloadPolicy, fully_shard
 from torch.distributed.fsdp import MixedPrecisionPolicy as FSDPMixedPrecisionPolicy
 import torchtitan.config
 import torchtitan.distributed
-from torchtitan.experiments.simple_fsdp.simple_fsdp import data_parallel as simple_fsdp_data_parallel
-from torchtitan.experiments.simple_fsdp.simple_fsdp import MixedPrecisionPolicy as SimpleFSDPMixedPrecisionPolicy
+import torchtitan.trainer
+from torchtitan.experiments.graph_trainer.simple_fsdp import data_parallel as simple_fsdp_data_parallel
+from torchtitan.experiments.graph_trainer.simple_fsdp import MixedPrecisionPolicy as SimpleFSDPMixedPrecisionPolicy
 from torchtitan.experiments.tpu import tpu_job_config
 from torchtitan.experiments.tpu import workarounds
 from torchtitan.experiments.tpu.afmv7.model.model import OutputMode
-from torchtitan.models.llama3.infra.parallelize import disable_fsdp_gradient_division
+from torchtitan.models.llama3.parallelize import disable_fsdp_gradient_division
 from torchtitan.tools.logging import logger
 from torchtitan.experiments.tpu import utils as tpu_utils
 
@@ -68,7 +69,7 @@ def parallelize_afmv7(
     model: nn.Module,
     parallel_dims: torchtitan.distributed.ParallelDims,
     job_config: (
-        torchtitan.config.JobConfig
+        torchtitan.trainer.Trainer.Config
         | torchtitan.experiments.tpu.tpu_job_config.TPUJobConfig
     ),
 ) -> nn.Module:
@@ -203,7 +204,6 @@ def parallelize_afmv7(
         dp_mesh,
         mode=dp_mode,
         mp_policy=mp_policy,
-        ignored_params=ignored_lora_params,
     )
     logger.info("Applied Simple FSDP (dp mode=%s) to the model", dp_mode)
 
@@ -360,7 +360,7 @@ def apply_ac(model: nn.Module) -> None:
 
 
 def apply_compile(
-    model: nn.Module, job_config: "torchtitan.config.JobConfig"
+    model: nn.Module, job_config: "torchtitan.trainer.Trainer.Config"
 ) -> None:
   """Apply torch.compile to each TransformerLayer, Segment or Whole Model.
 

@@ -17,8 +17,8 @@ class TrainMinimalDistributedTest(
   @parameterized.named_parameters([
       dict(
           testcase_name="afmv7_ddp",
-          model_name="afmv7_tpu",
-          config_file="torchtitan/experiments/tpu/afmv7/train_configs/debug_model.toml",
+          _model_name="afmv7_tpu",
+          _config_file="torchtitan/experiments/tpu/afmv7/train_configs/debug_model.toml",
           data_parallel_shard_degree=1,
           data_parallel_replicate_degree=-1,
           tensor_parallel_degree=1,
@@ -26,8 +26,8 @@ class TrainMinimalDistributedTest(
       ),
       dict(
           testcase_name="afmv7_fsdp",
-          model_name="afmv7_tpu",
-          config_file="torchtitan/experiments/tpu/afmv7/train_configs/debug_model.toml",
+          _model_name="afmv7_tpu",
+          _config_file="torchtitan/experiments/tpu/afmv7/train_configs/debug_model.toml",
           data_parallel_shard_degree=-1,
           tensor_parallel_degree=1,
           skip_devices=None,
@@ -35,8 +35,8 @@ class TrainMinimalDistributedTest(
   ])
   def test_afmv7_train_minimal(
       self,
-      model_name,
-      config_file,
+      _model_name,
+      _config_file,
       data_parallel_shard_degree,
       tensor_parallel_degree,
       data_parallel_replicate_degree=None,
@@ -46,12 +46,12 @@ class TrainMinimalDistributedTest(
     """Runs execution test specifically for AFMv7's minimal trainer (experiments/tpu/afmv7/train_minimal.py)."""
 
     config_args = [
-        f"--model.name={model_name}",
-        f"--job.config_file={config_file}",
-        "--model.hf_assets_path=tests/assets/tokenizer",
-        "--training.dataset_path=tests/assets/c4_test",
+        "--module=torchtitan.experiments.tpu.afmv7",
+        "--config=afmv7_debugmodel",
+        "--hf_assets_path=tests/assets/tokenizer",
+        "--dataloader.dataset_path=tests/assets/c4_test",
         "--training.seq_len=128",
-        "--training.dataset=c4_test",
+        "--dataloader.dataset=c4_test",
         "--training.steps=5",
         "--training.local_batch_size=4",
     ]

@@ -10,8 +10,8 @@ from torchtitan.experiments.tpu import base_distributed_device_test
 from torchtitan.experiments.tpu.base_distributed_device_test import InputDistribution
 from torchtitan.experiments.tpu import distributed
 from torchtitan.experiments.tpu.afmv7.infra import parallelize as afmv7_parallelize
-import torchtitan.experiments.tpu.afmv7  # trigger afmv7_tpu model registration
-import torchtitan.protocols.train_spec as train_spec_module
+import torchtitan.experiments.tpu.afmv7 as afmv7_package
+from torchtitan.experiments.tpu.afmv7.model.model import AFMTextV7Wrapper
 import torchtitan.distributed
 from torchtitan.experiments.tpu.tpu_job_config import TPUJobConfig
 
@@ -26,10 +26,7 @@ def _verify_simple_fsdp_afmv7_training_loop_worker(device: torch.device,
                                                    rank: int, world_size: int):
     """Worker function to verify simple FSDP numerical equivalence on AFMv7 model."""
 
-    train_spec = train_spec_module.get_train_spec("afmv7_tpu")
-
-    model_args = train_spec.model_args["debugmodel-lora"]
-    model_args.use_lora = False
+    model_args = afmv7_package.afmv7_args["debugmodel"]
 
     # Apply FSDP wrapper
     def apply_fsdp_wrapper(model):
@@ -45,7 +42,6 @@ def _verify_simple_fsdp_afmv7_training_loop_worker(device: torch.device,
             tp=1,
             pp=1,
             ep=1,
-            etp=1,
             world_size=world_size)
         afmv7_parallelize.parallelize_afmv7(model, parallel_dims, job_config)
 
@@ -95,7 +91,7 @@ def _verify_simple_fsdp_afmv7_training_loop_worker(device: torch.device,
         device=device,
         rank=rank,
         world_size=world_size,
-        model_class=train_spec.model_cls,
+        model_class=AFMTextV7Wrapper,
         model_args=model_args,
         parallelism_func=apply_fsdp_wrapper,
         input_distribution=InputDistribution.SPLIT_BATCH,  # FSDP = Split Batch

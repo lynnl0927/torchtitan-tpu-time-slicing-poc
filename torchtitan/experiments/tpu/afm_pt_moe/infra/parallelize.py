@@ -7,10 +7,11 @@ from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy, fully_shard
 import torchtitan.config
 import torchtitan.distributed
+import torchtitan.trainer
 from torchtitan.experiments.tpu import tpu_job_config
 from torchtitan.experiments.tpu import workarounds
 from torchtitan.experiments.tpu.afm_pt_moe.model.model import OutputMode
-from torchtitan.models.llama3.infra.parallelize import disable_fsdp_gradient_division
+from torchtitan.models.llama3.parallelize import disable_fsdp_gradient_division
 from torchtitan.tools.logging import logger
 
 
@@ -18,7 +19,7 @@ def parallelize_afm_pt_moe(
     model: nn.Module,
     parallel_dims: torchtitan.distributed.ParallelDims,
     job_config: (
-        torchtitan.config.JobConfig
+        torchtitan.trainer.Trainer.Config
         | torchtitan.experiments.tpu.tpu_job_config.TPUJobConfig
     ),
 ) -> nn.Module:
@@ -163,7 +164,7 @@ def apply_ac(model: nn.Module) -> None:
 
 
 def apply_compile(
-    model: nn.Module, compile_config: "torchtitan.config.job_config.Compile"
+    model: nn.Module, compile_config: "torchtitan.config.CompileConfig"
 ) -> None:
   """Apply torch.compile to each TransformerLayer in segments.
 

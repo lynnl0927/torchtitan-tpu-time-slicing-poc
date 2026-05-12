@@ -1,11 +1,11 @@
 """AFMParallelTrackMoE model registration for TorchTitan TPU experiments."""
 
-from torchtitan.components.lr_scheduler import build_lr_schedulers
-from torchtitan.components.optimizer import build_optimizers
-from torchtitan.components.validate import build_validator
-from torchtitan.experiments.tpu.afmv7.tokenizer import build_afm_tokenizer
-from torchtitan.experiments.tpu.loss import build_cross_entropy_loss
-from torchtitan.hf_datasets.text_datasets import build_text_dataloader
+from torchtitan.components.loss import CrossEntropyLoss
+from torchtitan.components.lr_scheduler import LRSchedulersContainer
+from torchtitan.components.optimizer import OptimizersContainer
+from torchtitan.components.validate import Validator
+from torchtitan.experiments.tpu.afmv7.tokenizer import AFMTokenizerWrapper
+from torchtitan.hf_datasets.text_datasets import HuggingFaceTextDataLoader
 from torchtitan.protocols.train_spec import register_train_spec
 from torchtitan.protocols.train_spec import TrainSpec
 
@@ -125,12 +125,12 @@ register_train_spec(
         model_args=afm_pt_moe_args,
         parallelize_fn=parallelize_afm_pt_moe,
         pipelining_fn=None,
-        build_optimizers_fn=build_optimizers,
-        build_lr_schedulers_fn=build_lr_schedulers,
-        build_dataloader_fn=build_text_dataloader,
-        build_tokenizer_fn=build_afm_tokenizer,
-        build_loss_fn=build_cross_entropy_loss,
-        build_validator_fn=build_validator,
+        loss_config=CrossEntropyLoss.Config(),
+        optimizer_config=OptimizersContainer.Config(lr=8e-4),
+        lr_scheduler_config=LRSchedulersContainer.Config(warmup_steps=2),
+        dataloader_config=HuggingFaceTextDataLoader.Config(dataset="c4_test"),
+        tokenizer_config=AFMTokenizerWrapper.Config(),
+        validator_config=Validator.Config(enable=True),
         state_dict_adapter=None,
     ),
 )

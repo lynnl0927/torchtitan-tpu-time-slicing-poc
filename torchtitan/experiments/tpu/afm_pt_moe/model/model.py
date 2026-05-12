@@ -5,7 +5,7 @@ import enum
 import torch
 import torch.nn as nn
 
-from torchtitan.protocols.model import ModelProtocol
+from torchtitan.protocols.model import BaseModel
 from torchtitan.tools.logging import logger
 
 from .args import AFMPTMoeModelArgs
@@ -95,12 +95,16 @@ def _patch_tamm_lora_for_mixed_precision() -> None:
     )
 
 
-class AFMPTMoeWrapper(ModelProtocol):
-    """Wraps TAMM's AFMPTMoe as a TorchTitan ModelProtocol."""
+class AFMPTMoeWrapper(BaseModel):
+    """Wraps TAMM's AFMPTMoe as a TorchTitan BaseModel."""
 
-    def __init__(self, model_args: AFMPTMoeModelArgs) -> None:
-        super().__init__(model_args)
-        self._model_args = model_args
+    Config = AFMPTMoeModelArgs
+
+    def __init__(self, config: AFMPTMoeModelArgs) -> None:
+        super().__init__()
+        self.config = config
+        self._model_args = config
+        model_args = config
         # Default to LOGITS mode; parallelize.py flips this to HIDDEN_AND_WEIGHT
         # when loss_kernel.use_loss_kernel is True. Mirrors AFMTextV7Wrapper.
         self._output_mode: OutputMode = OutputMode.LOGITS
@@ -186,7 +190,7 @@ class AFMPTMoeWrapper(ModelProtocol):
         output = self.model(tokens)
         return output.predictions
 
-    def init_weights(self, buffer_device: torch.device | None = None) -> None:
+    def init_states(self, *, buffer_device: torch.device | None = None) -> None:
         """Initialize weights after model.to_empty(device) materializes storage.
 
         Uses uniform_(-0.01, 0.01) rather than TAMM's reset_parameters():

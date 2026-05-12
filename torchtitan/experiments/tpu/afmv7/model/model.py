@@ -5,7 +5,7 @@ import enum
 import torch
 import torch.nn as nn
 
-from torchtitan.protocols.model import BaseModelArgs, ModelProtocol
+from torchtitan.protocols.model import BaseModel
 from torchtitan.tools.logging import logger
 
 from .args import AFMTextV7ModelArgs
@@ -78,8 +78,8 @@ class OutputMode(enum.Enum):
     HIDDEN_AND_WEIGHT = "hidden_and_weight"  # Pallas: (hidden, weight.t())
 
 
-class AFMTextV7Wrapper(ModelProtocol):
-    """Wraps TAMM's AFMTextV7 as a TorchTitan ModelProtocol.
+class AFMTextV7Wrapper(BaseModel):
+    """Wraps TAMM's AFMTextV7 as a TorchTitan BaseModel.
 
     The wrapper handles:
     - Meta-device construction (TAMM models support torch.device("meta"))
@@ -87,10 +87,13 @@ class AFMTextV7Wrapper(ModelProtocol):
     - Weight initialization via reset_parameters() after FSDP materializtion
     - Forward pass that returns logits compatible with cross-entropy loss
     """
+    Config = AFMTextV7ModelArgs
 
-    def __init__(self, model_args: AFMTextV7ModelArgs) -> None:
-        super().__init__(model_args)
-        self._model_args = model_args
+    def __init__(self, config: AFMTextV7ModelArgs) -> None:
+        super().__init__()
+        self.config = config
+        self._model_args = config
+        model_args = config
         # Controls the forward return value.  Set by train_minimal/parallelize:
         #   "logits"           — normal path, returns output.predictions
         #   "hidden"           — chunked CE path, returns (hidden, None);
@@ -165,7 +168,7 @@ class AFMTextV7Wrapper(ModelProtocol):
         output = self.model(tokens)
         return output.predictions
 
-    def init_weights(self, buffer_device: torch.device | None = None) -> None:
+    def init_states(self, *, buffer_device: torch.device | None = None) -> None:
         """Initialize weights after model.to_empty(device) materializes storage.
 
         Uses simple uniform init rather than TAMM's reset_parameters() because
