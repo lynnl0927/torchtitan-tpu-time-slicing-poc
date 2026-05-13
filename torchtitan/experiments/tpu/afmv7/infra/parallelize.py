@@ -9,15 +9,15 @@ from torch.distributed.fsdp import CPUOffloadPolicy, fully_shard
 from torch.distributed.fsdp import MixedPrecisionPolicy as FSDPMixedPrecisionPolicy
 import torchtitan.config
 import torchtitan.distributed
-import torchtitan.trainer
 from torchtitan.experiments.graph_trainer.simple_fsdp import data_parallel as simple_fsdp_data_parallel
 from torchtitan.experiments.graph_trainer.simple_fsdp import MixedPrecisionPolicy as SimpleFSDPMixedPrecisionPolicy
 from torchtitan.experiments.tpu import tpu_job_config
+from torchtitan.experiments.tpu import utils as tpu_utils
 from torchtitan.experiments.tpu import workarounds
 from torchtitan.experiments.tpu.afmv7.model.model import OutputMode
-from torchtitan.distributed.fsdp import disable_fsdp_gradient_division
+from torchtitan.models.llama3.parallelize import disable_fsdp_gradient_division
 from torchtitan.tools.logging import logger
-from torchtitan.experiments.tpu import utils as tpu_utils
+import torchtitan.trainer
 
 
 class ParallelStrategy(Enum):
@@ -33,7 +33,9 @@ class ParallelStrategy(Enum):
   NONE = auto()
 
 
-def _determine_parallel_strategy(parallel_dims, train_config) -> ParallelStrategy:
+def _determine_parallel_strategy(
+    parallel_dims, train_config
+) -> ParallelStrategy:
   fsdp_enabled = parallel_dims.fsdp_enabled
   ddp_enabled = parallel_dims.dp_replicate_enabled
 
@@ -199,12 +201,13 @@ def parallelize_afmv7(
               train_config.training.mixed_precision_reduce
           ],
       )
-    model = simple_fsdp_data_parallel(
-        model,
-        dp_mesh,
-        mode=dp_mode,
-        mp_policy=mp_policy,
-    )
+    kwargs = {
+        "mode": dp_mode,
+        "mp_policy": mp_policy,
+    }
+    if ignored_lora_params is not None:
+      kwargs["ignored_params"] = ignored_lora_params
+    model = simple_fsdp_data_parallel(model, dp_mesh, **kwargs)
     logger.info("Applied Simple FSDP (dp mode=%s) to the model", dp_mode)
 
   elif strategy == ParallelStrategy.REGULAR_FSDP:
@@ -270,9 +273,7 @@ def parallelize_afmv7(
     )
 
   model.lora_params = lora_params
-  model.force_lora_parameter_ddp = (
-      train_config.lora.force_lora_parameter_ddp
-  )
+  model.force_lora_parameter_ddp = train_config.lora.force_lora_parameter_ddp
 
   if train_config.lora.force_lora_parameter_ddp and lora_params:
     if parallel_dims.fsdp_enabled:
@@ -423,7 +424,7 @@ def apply_fsdp(
 
   Args:
     model: Model to wrap.
-    dtype: Base model dtype (what params are stored/initialized in).
+    dp_mesh: DeviceMesh to use for data parallel.
     param_dtype: Dtype to cast params to during all-gather for compute.
     reduce_dtype: Dtype to use for gradient reduction (reduce-scatter).
     cpu_offload: Whether to enable CPU offloading.
