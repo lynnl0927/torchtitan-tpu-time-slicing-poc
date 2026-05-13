@@ -13,10 +13,16 @@ Example runs:
     --test_arg=--module=torchtitan.experiments.tpu.rl \
     --test_arg=--config=grpo_qwen3_4b_gf
 
-  # Qwen3 0.6B FSDP on GLP (http://sponge2/a3460ab4-644b-4503-b498-6e10dbc028e4)
+  # Qwen3 0.6B FSDP on GLP (http://sponge2/e3858b5c-ecc9-46b9-a149-9260c450d08d)
+  # xprof: http://xprof/?session_id=forge-00-11324-11324160252321533720
   rabbit test --norun_validations //torchtitan/experiments/tpu/rl:train_grpo_forge_tpu_glp_2x4 \
     --test_arg=--module=torchtitan.experiments.tpu.rl \
-    --test_arg=--config=grpo_qwen3_0_6b_glp
+    --test_arg=--config=grpo_qwen3_0_6b_glp \
+    --test_arg=--tpu-config.use-internal-xprof \
+    --test_arg=--profiler.profiler_active=2 \
+    --test_arg=--profiler.profile_freq=5 \
+    --test_arg=--sampler.no-use-fake-sampler \
+    --test_arg=--training.steps=5
 """
 
 # pylint: disable=protected-access
