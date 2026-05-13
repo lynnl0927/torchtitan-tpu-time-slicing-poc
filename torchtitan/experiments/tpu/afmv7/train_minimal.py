@@ -505,6 +505,7 @@ def start_trainer(train_config: TPUTrainerConfig) -> None:
 
   total_tokens = 0
   total_time = 0.0
+  start_time = None
   accumulated_tokens = 0
   accumulated_time = 0.0
   accumulated_steps = 0
@@ -523,6 +524,10 @@ def start_trainer(train_config: TPUTrainerConfig) -> None:
   ) as profiler:
     data_iterator = iter(dataloader)
     for step in range(steps):
+      if step == warmup_steps:
+        if torch.distributed.is_initialized():
+          torch.distributed.barrier()
+        start_time = time.perf_counter()
       step_start = time.perf_counter()
       step_tokens = local_batch_size * seq_len
       ntokens_seen += step_tokens
@@ -573,7 +578,6 @@ def start_trainer(train_config: TPUTrainerConfig) -> None:
 
       if step >= warmup_steps:
         total_tokens += step_tokens
-        total_time += step_time
 
       if should_log:
         avg_step_time = accumulated_time / accumulated_steps
@@ -593,6 +597,11 @@ def start_trainer(train_config: TPUTrainerConfig) -> None:
             grad_norm.item(),
             extra_metrics=extra_metrics,
         )
+
+  if torch.distributed.is_initialized():
+    torch.distributed.barrier()
+  if start_time is not None:
+    total_time = time.perf_counter() - start_time
 
   avg_tps = total_tokens / total_time if total_time > 0 else 0.0
   avg_tflops = num_flops_per_token * avg_tps / 1e12
