@@ -598,10 +598,10 @@ def start_trainer(train_config: TPUTrainerConfig) -> None:
             extra_metrics=extra_metrics,
         )
 
-  if torch.distributed.is_initialized():
-    torch.distributed.barrier()
-  if start_time is not None:
-    total_time = time.perf_counter() - start_time
+    if torch.distributed.is_initialized():
+      torch.distributed.barrier()
+    if start_time is not None:
+      total_time = time.perf_counter() - start_time
 
   avg_tps = total_tokens / total_time if total_time > 0 else 0.0
   avg_tflops = num_flops_per_token * avg_tps / 1e12

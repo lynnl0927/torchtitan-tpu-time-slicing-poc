@@ -4,6 +4,7 @@ from torchtitan.components.lr_scheduler import LRSchedulersContainer
 from torchtitan.components.metrics import MetricsProcessor
 from torchtitan.components.optimizer import OptimizersContainer
 from torchtitan.components.validate import Validator
+from torchtitan.tools.profiler import Profiler
 from torchtitan.config.configs import (
     ActivationCheckpointConfig,
     CompileConfig,
@@ -138,6 +139,11 @@ def afmv7_3b() -> TPUTrainerConfig:
           dataset="c4_test",
       ),
       metrics=MetricsProcessor.Config(log_freq=5),
+      profiler=Profiler.Config(
+          enable_profiling=False,
+          profile_freq=19,
+          profiler_active=3,
+      ),
       parallelism=ParallelismConfig(
           data_parallel_replicate_degree=1,
           data_parallel_shard_degree=-1,
