@@ -9,7 +9,7 @@ blaze test -c opt --config=cuda //torchtitan/experiments/tpu/llama3/tests:test_l
 Notes:
 
 - Running on GPU requires compilation with CUDA (--config=cuda).
-  It's safe to run all tests with the cuda config.
+  It's safe to run all tests with the cuda config, but this may cause OOM during build.
 - Be sure to run with "-c opt" to avoid Forge OOMs during build.
 
 ## Available Targets
