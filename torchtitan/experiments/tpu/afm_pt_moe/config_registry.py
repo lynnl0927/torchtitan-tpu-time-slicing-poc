@@ -93,7 +93,7 @@ def afm_pt_moe_3b() -> TPUTrainerConfig:
   config.training.local_batch_size = 1
   config.training.seq_len = 512
   config.training.steps = 5
-  config.training.dataset = "random"
+  config.dataloader.dataset = "random"
   config.training.dtype = "float32"
   config.tpu_config.eager_mode = "DEFER_AND_FUSE"
   config.tpu_config.enable_amp = True

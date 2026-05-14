@@ -498,7 +498,7 @@ class VecAttention(nnx.Module):
         local_window = self.local_window
         # Pick splash kernel by attention type: global_nope → CausalMask
         # variant; local_rope → LocalMask variant. Both are ``None`` on CPU /
-        # when --jax_config.use_splash_attention_kernel=False, in which case
+        # when --splash_attention_kernel.use_splash_attention_kernel=False, in which case
         # _scaled_dot_product_attention falls back to dense banded SDPA.
         if self.attention_type == "global_nope":
             attn_fn = self._attn_fn_global
