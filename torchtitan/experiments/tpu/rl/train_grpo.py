@@ -23,6 +23,16 @@ Example runs:
     --test_arg=--profiler.profile_freq=5 \
     --test_arg=--sampler.no-use-fake-sampler \
     --test_arg=--training.steps=5
+
+  # AFMv7 debug model FSDP on GLP (http://sponge2/c2bb1c92-f063-4f56-b6ef-a8c01c1d3b45)
+  rabbit test --norun_validations //torchtitan/experiments/tpu/rl:train_grpo_forge_tpu_glp_2x4 \
+    --test_arg=--module=torchtitan.experiments.tpu.rl \
+    --test_arg=--config=grpo_afmv7_debugmodel \
+    --test_arg=--tpu-config.use-internal-xprof \
+    --test_arg=--profiler.profiler_active=2 \
+    --test_arg=--profiler.profile_freq=5 \
+    --test_arg=--sampler.no-use-fake-sampler \
+    --test_arg=--training.steps=5
 """
 
 # pylint: disable=protected-access
@@ -58,7 +68,6 @@ import torchtitan.experiments.tpu.rl.grpo_utils as grpo_utils
 import torchtitan.protocols.train_spec as train_spec_module
 from torchtitan.tools import utils
 import torchtitan.tools.logging
-
 
 
 TORCH_DTYPE_MAP = torchtitan.config.TORCH_DTYPE_MAP

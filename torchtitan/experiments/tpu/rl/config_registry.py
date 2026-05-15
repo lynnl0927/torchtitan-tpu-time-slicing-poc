@@ -15,6 +15,7 @@ from torchtitan.experiments.tpu.rl.grpo_job_config import (
     GRPOTrainingConfig,
 )
 from torchtitan.protocols.model_spec import ModelSpec
+from torchtitan.experiments.tpu.afmv7 import afmv7_args, parallelize_afmv7
 from torchtitan.experiments.tpu.qwen3 import parallelize_qwen3, qwen3_configs
 
 
@@ -122,6 +123,42 @@ def grpo_qwen3_4b_gf() -> GRPOJobConfig:
           max_new_tokens=128,
           use_separate_sampler_model=False,
           use_fake_sampler=False,
+      ),
+      lr_scheduler=LRSchedulersContainer.Config(warmup_steps=4),
+      metrics=MetricsProcessor.Config(log_freq=1),
+      grpo=GRPOConfig(group_size=4, grpo_beta=0.1),
+  )
+
+
+def grpo_afmv7_debugmodel() -> GRPOJobConfig:
+  """AFMv7 debug model GRPO training."""
+  return GRPOJobConfig(
+      model_spec=ModelSpec(
+          name="afmv7_tpu",
+          flavor="debugmodel",
+          model=afmv7_args["debugmodel"],
+          parallelize_fn=parallelize_afmv7,
+          pipelining_fn=None,
+          post_optimizer_build_fn=None,
+          state_dict_adapter=None,
+      ),
+      model=ModelConfig(name="afmv7_tpu", flavor="debugmodel"),
+      training=GRPOTrainingConfig(
+          dataset="random",
+          seq_len=1024,
+          steps=8,
+          local_batch_size=2,
+      ),
+      parallelism=ParallelismConfig(
+          data_parallel_shard_degree=-1,
+          data_parallel_replicate_degree=1,
+          fsdp_reshard_after_forward="never",
+      ),
+      sampler=SamplerConfig(
+          use_vllm=False,
+          max_new_tokens=20,
+          use_separate_sampler_model=False,
+          use_fake_sampler=True,
       ),
       lr_scheduler=LRSchedulersContainer.Config(warmup_steps=4),
       metrics=MetricsProcessor.Config(log_freq=1),
