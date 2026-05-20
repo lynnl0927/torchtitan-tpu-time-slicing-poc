@@ -178,8 +178,6 @@ def start_trainer(train_config: tpu_job_config_module.TPUTrainerConfig):
         "afmv7_tpu",
         "afm_pt_moe",
         "afm_pt_moe_tpu",
-        "flux",
-        "flux_tpu",
     ):
       parallel_dims = kwargs.get("parallel_dims")
       return orig_parallelize(model, parallel_dims, train_config)
