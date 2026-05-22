@@ -15,12 +15,12 @@ export CLUSTER_NAME=YOUR_CLUSTER_NAME
 export REPOSITORY=YOUR_REPOSITORY # Repository containing docker image
 ```
 
-## Notes as of 4/23/26
+## Notes as of 5/21/26
 
-- TorchTPU version used is **`torch_tpu==0.1.1.dev20260422092830`** (nightly build from 2026-04-22).
-- **Master weights are float32** (`training.dtype=float32`, toml default). This is a hard requirement for full fine-tuning. Matmul compute still runs in bf16 via `mixed_precision_param=bfloat16`, with native fp32 accumulation on the MXU.
+- TorchTPU version used is at torch_tpu commit hash `9094bfa8` (from 2026-05-21).
+- **Master weights are float32** (`training.dtype=float32`, default). This is a hard requirement for full fine-tuning. Matmul compute still runs in bf16 via `mixed_precision_param=bfloat16`, with native fp32 accumulation on the MXU.
 - `--tpu_config.use_simple_fsdp` is the winner at this scale (matches the v6e-8 pattern).
-- Automatic mixed precision (AMP) is enabled by default in `afmv7_3b.toml` and is load-bearing for full fine-tuning.
+- Automatic mixed precision (AMP) is enabled by default in `afmv7_3b` configuration and is load-bearing for full fine-tuning.
 - vmem tuning: both recipes below use `--xla_tpu_scoped_vmem_limit_kib=65536` (was 131072 in prior baselines).
 
 
@@ -47,7 +47,8 @@ xpk workload create \
     --rdzv_endpoint=\$WORKERS_0_HOSTNAME:29501 \
     --node_rank=\$TPU_WORKER_ID \
     -m torchtitan.experiments.tpu.afmv7.train_minimal \
-    --job.config_file=torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b.toml \
+    --module=torchtitan.experiments.tpu.afmv7 \
+    --config=afmv7_3b \
     --compile.enable \
     --training.local_batch_size=4 \
     --tpu_config.use_simple_fsdp \
@@ -58,11 +59,11 @@ xpk workload create \
     --parallelism.data_parallel_shard_degree=-1"
 ```
 
-**4/23/26: With this configuration you should observe the following metrics**
+**5/21/26: With this configuration you should observe the following metrics**
 
-- Average TPS (excl. 10 warmup steps): **10,944**
-- Average MFU: **33.45%**
-- Total TPS (128 chips): 1,400,843
+- Average TPS (excl. 10 warmup steps): **10,151**
+- Average MFU: **31.02%**
+- Total TPS (128 chips): 1,299,328
 
 
 ## FSDP eager mode with AMP
@@ -88,7 +89,8 @@ xpk workload create \
     --rdzv_endpoint=\$WORKERS_0_HOSTNAME:29501 \
     --node_rank=\$TPU_WORKER_ID \
     -m torchtitan.experiments.tpu.afmv7.train_minimal \
-    --job.config_file=torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b.toml \
+    --module=torchtitan.experiments.tpu.afmv7 \
+    --config=afmv7_3b \
     --training.local_batch_size=4 \
     --tpu_config.use_simple_fsdp \
     --tpu_config.eager_mode=DEFER_AND_FUSE \
@@ -97,8 +99,8 @@ xpk workload create \
     --parallelism.data_parallel_shard_degree=-1"
 ```
 
-**4/23/26: With this configuration you should observe the following metrics**
+**5/21/26: With this configuration you should observe the following metrics**
 
-- Average TPS (excl. 10 warmup steps): **7,108**
-- Average MFU: **21.72%**
-- Total TPS (128 chips): 909,825
+- Average TPS (excl. 10 warmup steps): **6,394**
+- Average MFU: **19.54%**
+- Total TPS (128 chips): 818,432

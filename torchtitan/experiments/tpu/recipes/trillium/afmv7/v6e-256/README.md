@@ -15,11 +15,10 @@ export CLUSTER_NAME=YOUR_CLUSTER_NAME
 export REPOSITORY=YOUR_REPOSITORY # Repository containing docker image
 ```
 
-## Notes as of 4/23/26
+## Notes as of 5/21/26
 
 - **Different configuration from v6e-8 / v6e-128**: at fsdp=256 `simple_fsdp` **hangs indefinitely** (4 attempts, both eager and compile). Both recipes below use **plain FSDP (fsdp2)** instead — omit the `--tpu_config.use_simple_fsdp` flag. On smaller slices simple_fsdp is the best non-LoRA config (+24% TPS over plain FSDP for compile), but at fsdp=256 it's broken.
-- **Do NOT use `train_minimal` entry** — it hangs at fsdp=256. Use `-m torchtitan.experiments.tpu.train`.
-- TorchTPU version used is **`torch_tpu==0.1.1.dev20260422092830`** (nightly build from 2026-04-22).
+- TorchTPU version used is at torch_tpu commit hash `9094bfa8` (from 2026-05-21).
 - **Master weights are float32** (hard requirement for full fine-tuning). Compute runs in bf16 via `mixed_precision_param=bfloat16`.
 - Local batch size 4 is the ceiling.
 - vmem tuning: both recipes below use `--xla_tpu_scoped_vmem_limit_kib=65536`.
@@ -47,8 +46,9 @@ xpk workload create \
     --rdzv_backend=static \
     --rdzv_endpoint=\$WORKERS_0_HOSTNAME:29501 \
     --node_rank=\$TPU_WORKER_ID \
-    -m torchtitan.experiments.tpu.train \
-    --job.config_file=torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b.toml \
+    -m torchtitan.experiments.tpu.afmv7.train_minimal \
+    --module=torchtitan.experiments.tpu.afmv7 \
+    --config=afmv7_3b \
     --compile.enable \
     --splash_attention_kernel.sa_block_kv_compute=1024 \
     --loss_kernel.loss_b_block_size=2048"
@@ -61,11 +61,11 @@ compile path. The toml default is already `true`, so omitting the
 explicit flag on the CLI doesn't change semantics for non-LoRA
 runs anyway.*
 
-**4/23/26: With this configuration you should observe the following metrics**
+**5/21/26: With this configuration you should observe the following metrics**
 
-- Average TPS/chip: **10,045**
-- Average MFU: **30.70%**
-- Total TPS (256 chips): 2,571,520
+- Average TPS/chip: **9,394**
+- Average MFU: **28.71%**
+- Total TPS (256 chips): 2,404,864
 
 
 ## FSDP eager mode — **not currently supported on v6e-256**

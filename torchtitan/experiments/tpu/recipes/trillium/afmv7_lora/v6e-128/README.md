@@ -15,17 +15,14 @@ export CLUSTER_NAME=YOUR_CLUSTER_NAME
 export REPOSITORY=YOUR_REPOSITORY # Repository containing docker image
 ```
 
-## Notes as of 4/23/26
+## Notes as of 5/21/26
 
-- TorchTPU version used is **`torch_tpu==0.1.1.dev20260422092830`** (nightly build from 2026-04-22).
+- TorchTPU version used is at torch_tpu commit hash `9094bfa8` (from 2026-05-21).
 - LoRA adapter dtype is **float32** (`--tpu_config.lora_dtype=float32`, with `--tpu_config.lora_rank=16`). fp32 storage keeps AdamW state precise; matmul compute still runs in bf16 via `mixed_precision_param`, with native fp32 accumulation on the MXU.
-- DDP+compile fits bs=2; FSDP eager fits bs=4.
-- FSDP eager uses the `tpu.train` entry point (`-m torchtitan.experiments.tpu.train`) instead of `train_minimal` — fp32 LoRA + `train_minimal` hangs at fsdp=128.
-- Automatic mixed precision (AMP) is disabled for 'DDP with compile' configuration (The configuration enables `--tpu_config.enable_manual_ddp` causing `enable_amp` flag to have no effect. We make this explicit with `--tpu_config.no-enable_amp`)
 - vmem tuning: both recipes below use `--xla_tpu_scoped_vmem_limit_kib=65536` (was 131072 in 4/16/26 baseline).
 
 
-## DDP with torch.compile
+## SimpleFSDP with torch.compile
 
 ```bash
 export WORKLOAD_NAME=YOUR_WORKLOAD_NAME
@@ -48,25 +45,25 @@ xpk workload create \
     --rdzv_endpoint=\$WORKERS_0_HOSTNAME:29501 \
     --node_rank=\$TPU_WORKER_ID \
     -m torchtitan.experiments.tpu.afmv7.train_minimal \
-    --job.config_file=torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b_lora.toml \
+    --module=torchtitan.experiments.tpu.afmv7 \
+    --config=afmv7_3b_lora \
     --compile.enable \
-    --training.local_batch_size=2 \
+    --tpu_config.use_simple_fsdp \
+    --training.local_batch_size=1 \
     --lora.lora_rank=16 \
     --lora.lora_dtype=float32 \
-    --afmv7.enable_manual_ddp \
-    --tpu_config.no-enable_amp \
+    --tpu_config.enable_amp \
     --tpu_config.eager_mode=DEFER_AND_FUSE \
     --lora.force_lora_parameter_ddp \
     --loss_kernel.loss_h_block_size=256 \
-    --parallelism.data_parallel_replicate_degree=-1 \
-    --parallelism.data_parallel_shard_degree=1"
+    --parallelism.data_parallel_replicate_degree=1 \
+    --parallelism.data_parallel_shard_degree=-1"
 ```
 
-**4/23/26: With this configuration you should observe the following metrics**
-
-- Average TPS/chip: **10,873**
-- Average MFU: **26.84%**
-- Total TPS (128 chips): 1,391,739
+**5/21/26: With this configuration you should observe the following metrics**
+- Average TPS/chip: **9,210**
+- Average MFU: **22.74%**
+- Total TPS (128 chips): 1,178,880
 
 
 ## FSDP eager mode with AMP
@@ -91,8 +88,9 @@ xpk workload create \
     --rdzv_backend=static \
     --rdzv_endpoint=\$WORKERS_0_HOSTNAME:29501 \
     --node_rank=\$TPU_WORKER_ID \
-    -m torchtitan.experiments.tpu.train \
-    --job.config_file=torchtitan/experiments/tpu/afmv7/train_configs/afmv7_3b_lora.toml \
+    -m torchtitan.experiments.tpu.afmv7.train_minimal \
+    --module=torchtitan.experiments.tpu.afmv7 \
+    --config=afmv7_3b_lora \
     --training.local_batch_size=4 \
     --lora.lora_rank=16 \
     --lora.lora_dtype=float32 \
@@ -102,7 +100,7 @@ xpk workload create \
     --parallelism.data_parallel_shard_degree=-1"
 ```
 
-**4/23/26: With this configuration you should observe the following metrics**
+**5/21/26: With this configuration you should observe the following metrics**
 
-- Average TPS/chip: **~7,700** (steps 5-20 range 7,658-7,731)
-- Average MFU: **~24.2%** (range 24.09-24.32%)
+- Average TPS/chip: **~6,726**
+- Average MFU: **16.60%**
