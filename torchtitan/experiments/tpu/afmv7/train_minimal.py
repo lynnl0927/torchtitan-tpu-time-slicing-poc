@@ -24,8 +24,9 @@ from torchtitan.distributed import utils as dist_utils
 from torchtitan.distributed.utils import clip_grad_norm_
 from torchtitan.experiments.tpu import gmain
 from torchtitan.experiments.tpu import model_annotator
-from torchtitan.experiments.tpu import profiler_workaround
+import torchtitan.experiments.tpu.profiler_workaround as profiler_workaround
 from torchtitan.experiments.tpu import utils as tpu_utils
+import torchtitan.tools.profiler as torchtitan_profiler
 import torchtitan.experiments.tpu.afmv7  # trigger afmv7_tpu model registration
 from torchtitan.experiments.tpu.loss import build_cross_entropy_loss
 from torchtitan.experiments.tpu.tpu_job_config import TPUTrainerConfig
@@ -511,13 +512,10 @@ def start_trainer(train_config: TPUTrainerConfig) -> None:
   accumulated_steps = 0
 
   warmup_steps = train_config.lr_scheduler.warmup_steps
-
-  maybe_enable_profiling = functools.partial(
-      profiler_workaround.maybe_enable_profiling, job_config=train_config
-  )
+  profiler_workaround.init(train_config)
 
   ntokens_seen = 0
-  with maybe_enable_profiling(
+  with torchtitan_profiler.Profiler(
       train_config.profiler,
       global_step=0,
       base_folder=train_config.dump_folder,
