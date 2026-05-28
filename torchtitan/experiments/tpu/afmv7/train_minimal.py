@@ -1,7 +1,7 @@
 r"""AFMv7 minimal training script using torchtitan infra.
 
-Example with v6e-4 vm (yeild ~7.1k TPS / chip):
-  export LIBTPU_INIT_ARGS='--xla_tpu_scoped_vmem_limit_kib=131072' && \
+Example with v6e-4 vm
+  export LIBTPU_INIT_ARGS='--xla_tpu_scoped_vmem_limit_kib=65536' && \
   torchrun --nproc_per_node=4 \
   -m torchtitan.experiments.tpu.afmv7.train_minimal \
   --module=torchtitan.experiments.tpu.afmv7 \

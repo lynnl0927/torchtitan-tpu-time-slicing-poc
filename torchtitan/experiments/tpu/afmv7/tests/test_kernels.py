@@ -74,6 +74,55 @@ class KernelNumericsTest(base_device_test.BaseAcceleratorDeviceTest):
         )
     logging.info("Splash Attention Backward parity passed.")
 
+  def test_tokamax_splash_attention_parity(self):
+    """Verifies Tokamax Splash Attention forward and backward parity on AFMv7 model."""
+    device = self.accelerator_device
+    model_wrapper = self._get_dummy_model()
+    model = model_wrapper.model # Get inner nn.Module
+
+    b, s = 2, 128
+    tokens = torch.randint(0, 2048, (b, s), device=device)
+
+    # 1. Reference run (Native Torch Attention)
+    model.zero_grad()
+
+    with attention.sdpa_kernel([attention.SDPBackend.MATH]):
+      out_ref = model(tokens)
+      logits_ref = out_ref.predictions
+
+    grad_out = torch.randn_like(logits_ref)
+    logits_ref.backward(grad_out)
+
+    # Save reference gradients
+    ref_grads = {name: p.grad.clone() for name, p in model.named_parameters() if p.grad is not None}
+
+    # 2. Patched run (Tokamax Splash Attention)
+    model.zero_grad()
+    class MockConfig:
+      pass
+    workarounds.use_tokamax_splash_attention_patch(model, MockConfig())
+
+    out_test = model(tokens)
+    logits_test = out_test.predictions
+
+    # Verify forward parity
+    torch.testing.assert_close(
+        logits_test.cpu(), logits_ref.cpu(), rtol=5e-2, atol=5e-2
+    )
+    logging.info("Tokamax Splash Attention Forward parity passed.")
+
+    logits_test.backward(grad_out)
+
+    # Verify backward parity
+    for name, p in model.named_parameters():
+      if name in ref_grads:
+        self.assertIsNotNone(p.grad, f"Gradient for {name} is None in patched run")
+        torch.testing.assert_close(
+            p.grad.cpu(), ref_grads[name].cpu(), rtol=5e-2, atol=5e-2
+        )
+    logging.info("Tokamax Splash Attention Backward parity passed.")
+
+
   def test_loss_numerics_parity(self):
     """Verifies Linear Softmax Cross Entropy Loss forward and backward parity on AFMv7 model."""
     device = self.accelerator_device

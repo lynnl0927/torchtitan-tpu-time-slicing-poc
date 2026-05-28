@@ -103,37 +103,31 @@ def parallelize_afmv7(
     raise RuntimeError("Tensor Parallelism is not supported for AFMTextV7 yet")
 
   use_splash_attention_kernel = False
+  use_tokamax_splash_attention_kernel = False
   use_loss_kernel = False
   enable_amp = True
   if isinstance(train_config, tpu_job_config.TPUTrainerConfig):
     use_splash_attention_kernel = (
         train_config.splash_attention_kernel.use_splash_attention_kernel
     ) and tpu_utils.get_device_type() == "tpu"
+    use_tokamax_splash_attention_kernel = (
+        train_config.splash_attention_kernel.use_tokamax_splash_attention_kernel
+    ) and tpu_utils.get_device_type() == "tpu"
     use_loss_kernel = (
         train_config.loss_kernel.use_loss_kernel
     ) and tpu_utils.get_device_type() == "tpu"
     enable_amp = train_config.tpu_config.enable_amp
 
-  if use_splash_attention_kernel:
+  if use_splash_attention_kernel or use_tokamax_splash_attention_kernel:
     if isinstance(train_config, tpu_job_config.TPUTrainerConfig):
-      workarounds.use_splash_attention_patch(
-          model,
-          block_q=train_config.splash_attention_kernel.sa_block_q,
-          block_kv=train_config.splash_attention_kernel.sa_block_kv,
-          block_dkv=train_config.splash_attention_kernel.sa_block_dkv,
-          block_kv_compute=train_config.splash_attention_kernel.sa_block_kv_compute,
-          block_q_dkv=train_config.splash_attention_kernel.sa_block_q_dkv,
-          block_kv_dkv=train_config.splash_attention_kernel.sa_block_kv_dkv,
-          block_kv_dkv_compute=train_config.splash_attention_kernel.sa_block_kv_dkv_compute,
-          block_q_dq=train_config.splash_attention_kernel.sa_block_q_dq,
-          block_kv_dq=train_config.splash_attention_kernel.sa_block_kv_dq,
-          use_fused_bwd_kernel=train_config.splash_attention_kernel.sa_use_fused_bwd_kernel,
-          q_layout=train_config.splash_attention_kernel.sa_q_layout,
-          k_layout=train_config.splash_attention_kernel.sa_k_layout,
-          v_layout=train_config.splash_attention_kernel.sa_v_layout,
-      )
-    else:
+      sa_config = train_config.splash_attention_kernel
+      if use_tokamax_splash_attention_kernel:
+        workarounds.use_tokamax_splash_attention_patch(model, sa_config)
+      elif use_splash_attention_kernel:
+        workarounds.use_splash_attention_patch(model)
+    elif use_splash_attention_kernel:
       workarounds.use_splash_attention_patch(model)
+
 
   if use_loss_kernel:
     # Enable Pallas loss: forward returns (hidden, weight.t()) so
