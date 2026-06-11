@@ -119,14 +119,11 @@ def parallelize_afmv7(
     enable_amp = train_config.tpu_config.enable_amp
 
   if use_splash_attention_kernel or use_tokamax_splash_attention_kernel:
-    if isinstance(train_config, tpu_job_config.TPUTrainerConfig):
-      sa_config = train_config.splash_attention_kernel
-      if use_tokamax_splash_attention_kernel:
-        workarounds.use_tokamax_splash_attention_patch(model, sa_config)
-      elif use_splash_attention_kernel:
-        workarounds.use_splash_attention_patch(model)
+    sa_config = train_config.splash_attention_kernel
+    if use_tokamax_splash_attention_kernel:
+      workarounds.use_tokamax_splash_attention_patch(model, sa_config)
     elif use_splash_attention_kernel:
-      workarounds.use_splash_attention_patch(model)
+      workarounds.use_splash_attention_patch(model, sa_config)
 
 
   if use_loss_kernel:
