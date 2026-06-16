@@ -17,7 +17,7 @@ export REPOSITORY=YOUR_REPOSITORY # Repository containing docker image
 
 ## Notes as of 5/21/26
 
-- TorchTPU version used is at torch_tpu commit hash `9094bfa8` (from 2026-05-21).
+- TorchTPU version used is at torch_tpu commit hash `d294bbc9` (from 2026-06-15).
 - **Master weights are float32** (`training.dtype=float32`, toml default). This is a hard requirement for full fine-tuning. Matmul compute still runs in bf16 via `mixed_precision_param=bfloat16`, with native fp32 accumulation on the MXU.
 - `--tpu_config.use_simple_fsdp` is the winner on v6e-8 — **+24% TPS** over plain FSDP for compile, +4% for eager.
 - Automatic mixed precision (AMP) is enabled by default in `afmv7_3b` configuration (`enable_amp = true`) and is load-bearing for full fine-tuning.
@@ -59,11 +59,11 @@ xpk workload create \
     --parallelism.data_parallel_shard_degree=-1"
 ```
 
-**5/21/26: With this configuration you should observe the following metrics**
+**6/15/26: With this configuration you should observe the following metrics**
 
-- Average TPS/chip: **11,130**
-- Average MFU: **34.02%**
-- Total TPS (8 chips): 89,040
+- Average TPS/chip: **11,892**
+- Average MFU: **36.34%**
+- Total TPS (8 chips): 95,136
 
 
 ## FSDP eager mode with AMP
@@ -99,8 +99,8 @@ xpk workload create \
     --parallelism.data_parallel_shard_degree=-1"
 ```
 
-**5/21/26: With this configuration you should observe the following metrics**
+**6/15/26: With this configuration you should observe the following metrics**
 
-- Average TPS (excl. 10 warmup steps): **6,870**
-- Average MFU: **21.00%**
-- Total TPS (8 chips): 54,960
+- Average TPS (excl. 10 warmup steps): **8,002**
+- Average MFU: **24.54%**
+- Total TPS (8 chips): 64,016

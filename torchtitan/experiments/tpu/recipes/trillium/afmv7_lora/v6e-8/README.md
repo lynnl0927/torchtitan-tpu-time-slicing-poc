@@ -17,7 +17,7 @@ export REPOSITORY=YOUR_REPOSITORY # Repository containing docker image
 
 ## Notes as of 5/21/26
 
-- TorchTPU version used is at torch_tpu commit hash `9094bfa8` (from 2026-05-21).
+- TorchTPU version used is at torch_tpu commit hash `d294bbc9` (from 2026-06-215).
 - LoRA adapter dtype is **float32** (`--tpu_config.lora_dtype=float32`, with `--tpu_config.lora_rank=16`). fp32 storage keeps AdamW state precise; matmul compute still runs in bf16 via `mixed_precision_param`, with native fp32 accumulation on the MXU.
 - SimpleFSDP+compile fits bs=1; FSDP eager fits bs=4.
 - vmem tuning: both recipes below use `--xla_tpu_scoped_vmem_limit_kib=65536` (was 131072 in 4/16/26 baseline).
@@ -61,10 +61,10 @@ xpk workload create \
     --parallelism.data_parallel_shard_degree=-1"
 ```
 
-**5/21/26: With this configuration you should observe the following metrics**
+**6/15/26: With this configuration you should observe the following metrics**
 
-- Average TPS/chip: 9940
-- Average MFU: 24.54%
+- Average TPS/chip: 10,858
+- Average MFU: 26.80%
 
 
 ## FSDP eager mode with AMP
@@ -93,6 +93,7 @@ xpk workload create \
     --module=torchtitan.experiments.tpu.afmv7 \
     --config=afmv7_3b_lora \
     --training.local_batch_size=4 \
+    --tpu_config.use_simple_fsdp \
     --lora.lora_rank=16 \
     --lora.lora_dtype=float32 \
     --tpu_config.enable_amp \
@@ -101,7 +102,7 @@ xpk workload create \
     --parallelism.data_parallel_shard_degree=-1"
 ```
 
-**5/21/26: With this configuration you should observe the following metrics**
+**6/15/26: With this configuration you should observe the following metrics**
 
-- Average TPS (excl. 10 warmup steps): **7,088**
-- Average MFU: **17.50%**
+- Average TPS (excl. 10 warmup steps): **8,037**
+- Average MFU: **19.84%**

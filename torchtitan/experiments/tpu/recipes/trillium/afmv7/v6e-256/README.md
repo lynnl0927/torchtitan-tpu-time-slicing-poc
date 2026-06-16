@@ -17,14 +17,12 @@ export REPOSITORY=YOUR_REPOSITORY # Repository containing docker image
 
 ## Notes as of 5/21/26
 
-- **Different configuration from v6e-8 / v6e-128**: at fsdp=256 `simple_fsdp` **hangs indefinitely** (4 attempts, both eager and compile). Both recipes below use **plain FSDP (fsdp2)** instead — omit the `--tpu_config.use_simple_fsdp` flag. On smaller slices simple_fsdp is the best non-LoRA config (+24% TPS over plain FSDP for compile), but at fsdp=256 it's broken.
-- TorchTPU version used is at torch_tpu commit hash `9094bfa8` (from 2026-05-21).
+- TorchTPU version used is at torch_tpu commit hash `d294bbc9` (from 2026-05-21).
 - **Master weights are float32** (hard requirement for full fine-tuning). Compute runs in bf16 via `mixed_precision_param=bfloat16`.
 - Local batch size 4 is the ceiling.
 - vmem tuning: both recipes below use `--xla_tpu_scoped_vmem_limit_kib=65536`.
 
-
-## FSDP with torch.compile (plain FSDP — replacement for simple_fsdp at this scale)
+## FSDP with torch.compile
 
 ```bash
 export WORKLOAD_NAME=YOUR_WORKLOAD_NAME
@@ -50,6 +48,7 @@ xpk workload create \
     --module=torchtitan.experiments.tpu.afmv7 \
     --config=afmv7_3b \
     --compile.enable \
+    --tpu-config.use-simple-fsdp \
     --splash_attention_kernel.sa_block_kv_compute=1024 \
     --loss_kernel.loss_b_block_size=2048"
 ```
@@ -61,24 +60,48 @@ compile path. The toml default is already `true`, so omitting the
 explicit flag on the CLI doesn't change semantics for non-LoRA
 runs anyway.*
 
-**5/21/26: With this configuration you should observe the following metrics**
+**6/15/26: With this configuration you should observe the following metrics**
 
-- Average TPS/chip: **9,394**
+- Average TPS/chip: **11,472**
+- Average MFU: **35.06%**
+- Total TPS (256 chips): 2,936,832
+
+## FSDP eager mode
+
+```bash
+export WORKLOAD_NAME=YOUR_WORKLOAD_NAME
+
+xpk workload create \
+  --workload=$WORKLOAD_NAME \
+  --cluster=$CLUSTER_NAME \
+  --project=$PROJECT_ID \
+  --zone=$PROJECT_ID \
+  --tpu-type="v6e-256" \
+  --num-slices=1 \
+  --docker-image="us-west1-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/torchtitan-container:latest" \
+  --env WORKERS_0_HOSTNAME="$WORKLOAD_NAME-slice-job-0-0.$WORKLOAD_NAME" \
+  --env LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=65536" \
+  --command "
+    torchrun \
+    --nnodes=64 \
+    --nproc_per_node=4 \
+    --rdzv_backend=static \
+    --rdzv_endpoint=\$WORKERS_0_HOSTNAME:29501 \
+    --node_rank=\$TPU_WORKER_ID \
+    -m torchtitan.experiments.tpu.afmv7.train_minimal \
+    --module=torchtitan.experiments.tpu.afmv7 \
+    --config=afmv7_3b \
+    --training.steps=30 \
+    --training.local-batch-size=4 \
+    --tpu-config.use-simple-fsdp \
+    --tpu-config.eager-mode=DEFER_AND_FUSE \
+    --splash-attention-kernel.sa-block-kv-compute=1024 \
+    --parallelism.data-parallel-replicate-degree=1 \
+    --parallelism.data-parallel-shard-degree=-1"
+```
+
+**6/15/26: With this configuration you should observe the following metrics**
+
+- Average TPS/chip: **7,747**
 - Average MFU: **28.71%**
-- Total TPS (256 chips): 2,404,864
-
-
-## FSDP eager mode — **not currently supported on v6e-256**
-
-As of 4/23/26, full FT (non-LoRA) eager on v6e-256 does not have a
-working recipe with the current image:
-
-- `--tpu_config.use_simple_fsdp`: **hangs** (same simple_fsdp-at-fsdp=256 issue as the LoRA side).
-- **Plain FSDP (fsdp2)** (no simple_fsdp): crashes with a
-  `torch._dynamo.exc.Unsupported: Attempted to call function marked
-  as skipped` graph break at model forward. The `eager_mode=DEFER_AND_FUSE`
-  path invokes dynamo internally, and at fsdp=256 scale it trips on
-  `torch._dynamo.decorators.disable`. Not reproduced on v6e-8 /
-  v6e-128.
-
-Use the compile recipe above until a fix lands.
+- Total TPS (256 chips): 1,983,232

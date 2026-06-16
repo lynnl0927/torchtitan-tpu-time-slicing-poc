@@ -17,9 +17,7 @@ export REPOSITORY=YOUR_REPOSITORY # Repository containing docker image
 
 ## Notes as of 5/21/26
 
-- **Different configuration from v6e-8 / v6e-128**: at fsdp=256 the `DDP with torch.compile` recipe that's best on smaller slices **fails** (`--tpu_config.enable_manual_ddp --compile.enable` crashes in 2+ attempts). The compile recipe below uses **FSDP with plain FSDP (fsdp2)** instead, via the `tpu.train` entry point.
-- **Do NOT pass `--tpu_config.use_simple_fsdp`** at this scale — it hangs indefinitely on fsdp=256 (4 attempts, both eager and compile). Use plain FSDP (no flag).
-- TorchTPU version used is at torch_tpu commit hash `9094bfa8` (from 2026-05-21).
+- TorchTPU version used is at torch_tpu commit hash `d294bbc9` (from 2026-06-15).
 - LoRA adapter dtype is **float32** (`--tpu_config.lora_dtype=float32`, with `--tpu_config.lora_rank=16`). fp32 storage keeps AdamW state precise; matmul compute still runs in bf16 via `mixed_precision_param`, with native fp32 accumulation on the MXU.
 - FSDP compile fits bs=3; FSDP eager fits bs=4.
 - vmem tuning: both recipes below use `--xla_tpu_scoped_vmem_limit_kib=65536`.
@@ -51,6 +49,7 @@ xpk workload create \
     --module=torchtitan.experiments.tpu.afmv7 \
     --config=afmv7_3b_lora \
     --compile.enable \
+    --tpu-config.use-simple-fsdp \
     --training.local_batch_size=3 \
     --lora.lora_rank=16 \
     --lora.lora_dtype=float32 \
@@ -67,11 +66,11 @@ torch.compile/dynamo `linalg_vecdot` FakeTensor error. The flag works
 fine at smaller scales but breaks at this scale — leaving it off is
 the working path.*
 
-**5/21/26: With this configuration you should observe the following metrics**
+**6/15/26: With this configuration you should observe the following metrics**
 
-- Average TPS/chip: **7,343**
-- Average MFU: **18.13%**
-- Total TPS (256 chips): 1,879,808
+- Average TPS/chip: **10,033**
+- Average MFU: **24.18%**
+- Total TPS (256 chips): 2,568,448
 
 
 ## FSDP eager mode with AMP
@@ -102,14 +101,15 @@ xpk workload create \
     --training.local_batch_size=4 \
     --lora.lora_rank=16 \
     --lora.lora_dtype=float32 \
+    --tpu_config.use-simple-fsdp \
     --tpu_config.enable_amp \
     --tpu_config.eager_mode=DEFER_AND_FUSE \
     --parallelism.data_parallel_replicate_degree=1 \
     --parallelism.data_parallel_shard_degree=-1"
 ```
 
-**5/21/26: With this configuration you should observe the following metrics**
+**6/15/26: With this configuration you should observe the following metrics**
 
-- Average TPS/chip: **~6,193**
-- Average MFU: **15.29%**
-- Total TPS (256 chips): ~1,585,408
+- Average TPS/chip: **~7,481**
+- Average MFU: **22.86%**
+- Total TPS (256 chips): ~1,915,136
