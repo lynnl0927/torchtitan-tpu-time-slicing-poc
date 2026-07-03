@@ -182,7 +182,7 @@ def apply_compile(
         compiled = torch.compile(
             layer, backend=compile_config.backend, fullgraph=True
         )
-        seg.register_module(layer_id, compiled)
+        seg.register_module(layer_id, compiled)  # pyrefly: ignore[bad-argument-type]
 
 
 def apply_fsdp(

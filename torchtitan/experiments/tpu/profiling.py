@@ -59,7 +59,7 @@ def run_distributed_with_profiling(
 ) -> None:
   """Runs a function in a distributed manner with profiling enabled."""
 
-  result_queue = mp.Queue()
+  result_queue = mp.Queue()  # pyrefly: ignore[missing-attribute]
   worker_args = worker_args + (result_queue,)
 
   torchtitan_distributed.run_distributed(

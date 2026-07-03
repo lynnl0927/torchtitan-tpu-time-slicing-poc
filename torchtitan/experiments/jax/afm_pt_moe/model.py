@@ -669,8 +669,8 @@ class SparseMoEFeedForward(nnx.Module):
         )
 
         # 3. expert_fn — runs gate/up/down on the sorted tokens.
-        gate_w = self.experts.hidden_transform.linear_0.weight[...]
-        up_w = self.experts.hidden_transform.linear_1.weight[...]
+        gate_w = self.experts.hidden_transform.linear_0.weight[...]  # pyrefly: ignore[missing-attribute]
+        up_w = self.experts.hidden_transform.linear_1.weight[...]  # pyrefly: ignore[missing-attribute]
         down_w = self.experts.output_transform.weight[...]
 
         def expert_fn(sorted_x, group_sizes):

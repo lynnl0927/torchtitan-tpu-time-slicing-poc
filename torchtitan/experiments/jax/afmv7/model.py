@@ -238,7 +238,7 @@ class AdaptedLinear(nnx.Module):
     def __call__(self, x: jax.Array) -> jax.Array:
         y = self._base_linear()(x)
         if self.use_lora:
-            y = self.adapters.lora(x, y)
+            y = self.adapters.lora(x, y)  # pyrefly: ignore[missing-attribute]
         return y
 
 
@@ -322,7 +322,7 @@ class _LinearWithLoRA(nnx.Module):
 
     def __call__(self, x: jax.Array) -> jax.Array:
         y = self.wrapped(x)
-        y = self.adapters.lora(x, y)
+        y = self.adapters.lora(x, y)  # pyrefly: ignore[missing-attribute]
         return y
 
 
@@ -390,9 +390,9 @@ class FusedQKVLinear(nnx.Module):
         if self.use_lora:
             # Apply one adapter per branch, mirroring tamm LoRA for
             # FusedMultiOutputLinear (three separate LoRA modules).
-            q = self.adapters.lora_0(x, q)
-            k = self.adapters.lora_1(x, k)
-            v = self.adapters.lora_2(x, v)
+            q = self.adapters.lora_0(x, q)  # pyrefly: ignore[missing-attribute]
+            k = self.adapters.lora_1(x, k)  # pyrefly: ignore[missing-attribute]
+            v = self.adapters.lora_2(x, v)  # pyrefly: ignore[missing-attribute]
         return q, k, v
 
 

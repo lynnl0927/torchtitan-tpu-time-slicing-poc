@@ -68,15 +68,15 @@ def _build_pt_model(args: JaxArgs) -> torch.nn.Module:
         _patch_tamm_lora_for_mixed_precision()
         adapters = {
             "lora": tamm.adapters.LoRAModelAdapter(
-                rank=args.lora_rank,
-                alpha=float(args.lora_alpha),
-                dtype=getattr(torch, args.lora_dtype),
-                adapt_attention_queries=True,
-                adapt_attention_keys=True,
-                adapt_attention_values=True,
-                adapt_attention_outputs=True,
-                adapt_feed_forward_hidden_states=True,
-                adapt_feed_forward_outputs=True,
+                rank=args.lora_rank,  # pyrefly: ignore[unexpected-keyword]
+                alpha=float(args.lora_alpha),  # pyrefly: ignore[unexpected-keyword]
+                dtype=getattr(torch, args.lora_dtype),  # pyrefly: ignore[unexpected-keyword]
+                adapt_attention_queries=True,  # pyrefly: ignore[unexpected-keyword]
+                adapt_attention_keys=True,  # pyrefly: ignore[unexpected-keyword]
+                adapt_attention_values=True,  # pyrefly: ignore[unexpected-keyword]
+                adapt_attention_outputs=True,  # pyrefly: ignore[unexpected-keyword]
+                adapt_feed_forward_hidden_states=True,  # pyrefly: ignore[unexpected-keyword]
+                adapt_feed_forward_outputs=True,  # pyrefly: ignore[unexpected-keyword]
             )
         }
 

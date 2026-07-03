@@ -54,30 +54,30 @@ def _build_pt_model(args: JaxArgs) -> torch.nn.Module:
     import tamm.models.afm_text.afm_pt_moe as afm_pt_moe_mod
 
     cfg = afm_pt_moe_mod.AFMParallelTrackMoEConfig(
-        vocab_size=args.vocab_size,
-        num_tracks=args.num_tracks,
-        num_layers_per_track=args.num_layers_per_track,
-        num_layers_per_track_per_sync_point=args.num_layers_per_track_per_sync_point,
-        hidden_dim=args.hidden_dim,
-        attention_hidden_dim=args.attention_hidden_dim,
-        dense_feed_forward_hidden_dim=args.dense_feed_forward_hidden_dim,
-        sparse_feed_forward_hidden_dim=args.sparse_feed_forward_hidden_dim,
-        num_heads=args.num_heads,
-        num_kv_heads=args.num_kv_heads,
-        rope_theta=args.rope_theta,
-        num_experts=args.num_experts,
-        num_experts_per_token=args.num_experts_per_token,
+        vocab_size=args.vocab_size,  # pyrefly: ignore[unexpected-keyword]
+        num_tracks=args.num_tracks,  # pyrefly: ignore[unexpected-keyword]
+        num_layers_per_track=args.num_layers_per_track,  # pyrefly: ignore[unexpected-keyword]
+        num_layers_per_track_per_sync_point=args.num_layers_per_track_per_sync_point,  # pyrefly: ignore[unexpected-keyword]
+        hidden_dim=args.hidden_dim,  # pyrefly: ignore[unexpected-keyword]
+        attention_hidden_dim=args.attention_hidden_dim,  # pyrefly: ignore[unexpected-keyword]
+        dense_feed_forward_hidden_dim=args.dense_feed_forward_hidden_dim,  # pyrefly: ignore[unexpected-keyword]
+        sparse_feed_forward_hidden_dim=args.sparse_feed_forward_hidden_dim,  # pyrefly: ignore[unexpected-keyword]
+        num_heads=args.num_heads,  # pyrefly: ignore[unexpected-keyword]
+        num_kv_heads=args.num_kv_heads,  # pyrefly: ignore[unexpected-keyword]
+        rope_theta=args.rope_theta,  # pyrefly: ignore[unexpected-keyword]
+        num_experts=args.num_experts,  # pyrefly: ignore[unexpected-keyword]
+        num_experts_per_token=args.num_experts_per_token,  # pyrefly: ignore[unexpected-keyword]
         # Constraints needed to align with the JAX subset (see file docstring).
-        attention_layer_pattern=("local_rope",),
-        feed_forward_layer_pattern=("sparse",),
-        scale_qk_norm=False,
-        tracks_dispatch_norm="rms_norm",
-        tracks_combine_norm="rms_norm",
-        tracks_combine_op="sum",
-        pre_residual_norm="rms_norm",
-        local_attention_window_size=args.local_attention_window_size or 4096,
-        experts_router_logits_cap=None,
-        pretrained=False,
+        attention_layer_pattern=("local_rope",),  # pyrefly: ignore[unexpected-keyword]
+        feed_forward_layer_pattern=("sparse",),  # pyrefly: ignore[unexpected-keyword]
+        scale_qk_norm=False,  # pyrefly: ignore[unexpected-keyword]
+        tracks_dispatch_norm="rms_norm",  # pyrefly: ignore[unexpected-keyword]
+        tracks_combine_norm="rms_norm",  # pyrefly: ignore[unexpected-keyword]
+        tracks_combine_op="sum",  # pyrefly: ignore[unexpected-keyword]
+        pre_residual_norm="rms_norm",  # pyrefly: ignore[unexpected-keyword]
+        local_attention_window_size=args.local_attention_window_size or 4096,  # pyrefly: ignore[unexpected-keyword]
+        experts_router_logits_cap=None,  # pyrefly: ignore[unexpected-keyword]
+        pretrained=False,  # pyrefly: ignore[unexpected-keyword]
     )
     torch.manual_seed(0)
     model = cfg.create_basic_builder().build()
