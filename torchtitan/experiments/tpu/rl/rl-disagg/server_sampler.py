@@ -34,6 +34,54 @@ logger = torchtitan.tools.logging.logger
 request_queue = queue.Queue()
 response_queue = queue.Queue()
 
+import socket
+class CPUCommandBroadcast:
+    """Broadcasts SPMD commands over CPU TCP sockets on localhost to keep TPU 100% idle while waiting!"""
+    def __init__(self, rank: int, world_size: int, port: int = 18001):
+        self.rank = rank
+        self.world_size = world_size
+        self.port = port
+        if world_size <= 1:
+            return
+            
+        if rank == 0:
+            self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server.bind(("127.0.0.1", port))
+            self.server.listen(world_size - 1)
+            self.clients = []
+            for _ in range(world_size - 1):
+                conn, _ = self.server.accept()
+                self.clients.append(conn)
+        else:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            for _ in range(600):
+                try:
+                    self.sock.connect(("127.0.0.1", port))
+                    break
+                except ConnectionRefusedError:
+                    time.sleep(0.1)
+            else:
+                raise RuntimeError(f"Rank {rank} failed to connect to CPU broadcast server on port {port}")
+                
+    def broadcast(self, data: typing.Any) -> typing.Any:
+        if self.world_size <= 1:
+            return data
+        if self.rank == 0:
+            payload = (json.dumps(data) + "\n").encode("utf-8")
+            for conn in self.clients:
+                conn.sendall(payload)
+            return data
+        else:
+            buffer = ""
+            while "\n" not in buffer:
+                chunk = self.sock.recv(4096).decode("utf-8")
+                if not chunk:
+                    raise ConnectionResetError("CPU broadcast server closed connection")
+                buffer += chunk
+            line, _, _ = buffer.partition("\n")
+            return json.loads(line)
+
 def fastapi_server():
     try:
         print("\n[FASTAPI THREAD]: Starting Sampler HTTP server on port 8001...", flush=True)
@@ -118,16 +166,15 @@ def start_sampler(job_config: grpo_job_config.GRPOJobConfig) -> None:
     for p in sampler_model.parameters():
         p.requires_grad = False
 
-    logger.info("Sampler model initialized. Entering SPMD control loop.")
+    logger.info("Sampler model initialized. Entering CPU-idle SPMD control loop.")
+    cpu_broadcast = CPUCommandBroadcast(rank, world_size, port=18001)
     while True:
         cmd_list = [None, None]
         if rank == 0:
             cmd, data = request_queue.get()
             cmd_list = [cmd, data]
         
-        if world_size > 1:
-            torch.distributed.broadcast_object_list(cmd_list, src=0)
-            
+        cmd_list = cpu_broadcast.broadcast(cmd_list)
         cmd, data = cmd_list
         
         if cmd == "generate":
