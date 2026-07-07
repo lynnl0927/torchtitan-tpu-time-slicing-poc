@@ -1,0 +1,206 @@
+# 1. Trainer Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: trainer-service
+spec:
+  clusterIP: None 
+  selector:
+    app: trainer
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+---
+# 2. Sampler Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: sampler-service
+spec:
+  clusterIP: None
+  selector:
+    app: sampler
+  ports:
+    - protocol: TCP
+      port: 8001
+      targetPort: 8001
+---
+# 3. Trainer Job on TPU v6e
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trainer-job
+spec:
+  template:
+    metadata:
+      labels:
+        app: trainer
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        cloud.google.com/gke-tpu-accelerator: tpu-v6e-slice
+        cloud.google.com/gke-tpu-topology: 2x4  # standard for single-host 8-chip v6e
+      initContainers:
+      - name: download-model
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:latest
+        command: ["/bin/bash", "-c"]
+        args:
+          - "pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint"
+        volumeMounts:
+        - name: checkpoint-vol
+          mountPath: /checkpoint
+      containers:
+      - name: trainer
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:latest
+        command: ["python3", "-m", "torch.distributed.run"]
+        args: 
+          - "--nproc_per_node=8"
+          - "/app/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_trainer.py"
+          - "--module=torchtitan.experiments.tpu.rl"
+          - "--config=grpo_qwen3_0_6b_glp"
+          - "--checkpoint.initial_load_path"
+          - "/checkpoint"
+          - "--checkpoint.initial_load_in_hf"
+          - "--checkpoint.enable"
+        volumeMounts:
+        - mountPath: /dev/shm
+          name: dshm
+        - mountPath: /checkpoint
+          name: checkpoint-vol
+        ports:
+        - containerPort: 8000
+        resources:
+          limits:
+            google.com/tpu: 8
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+      - name: checkpoint-vol
+        emptyDir: {}
+---
+# 4. Sampler Job on TPU v6e
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sampler-job
+spec:
+  template:
+    metadata:
+      labels:
+        app: sampler
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        cloud.google.com/gke-tpu-accelerator: tpu-v6e-slice
+        cloud.google.com/gke-tpu-topology: 2x4
+      initContainers:
+      - name: download-model
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:latest
+        command: ["/bin/bash", "-c"]
+        args:
+          - "pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint"
+        volumeMounts:
+        - name: checkpoint-vol
+          mountPath: /checkpoint
+      containers:
+      - name: sampler
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:latest
+        command: ["python3", "-m", "torch.distributed.run"]
+        args: 
+          - "--nproc_per_node=8"
+          - "/app/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_sampler.py"
+          - "--module=torchtitan.experiments.tpu.rl"
+          - "--config=grpo_qwen3_0_6b_glp"
+          - "--checkpoint.initial_load_path"
+          - "/checkpoint"
+          - "--checkpoint.initial_load_in_hf"
+          - "--checkpoint.enable"
+        volumeMounts:
+        - mountPath: /dev/shm
+          name: dshm
+        - mountPath: /checkpoint
+          name: checkpoint-vol
+        ports:
+        - containerPort: 8001
+        resources:
+          limits:
+            google.com/tpu: 8
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+      - name: checkpoint-vol
+        emptyDir: {}
+---
+# 5. Orchestrator (Driver) Job on standard CPU
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: driver-job
+spec:
+  template:
+    metadata:
+      labels:
+        app: driver
+    spec:
+      restartPolicy: Never
+      # Runs on a standard CPU node (does not request TPU)
+      initContainers:
+      - name: download-model
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:latest
+        command: ["/bin/bash", "-c"]
+        args:
+          - "pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint"
+        volumeMounts:
+        - name: checkpoint-vol
+          mountPath: /checkpoint
+      containers:
+      - name: driver
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:latest
+        command: ["/bin/bash", "-c"]
+        args: 
+          - |
+            python3 -c '
+            import socket, time, os
+            for host, port in [(os.environ.get("TRAINER_IP", "trainer-service"), 8000), (os.environ.get("SAMPLER_IP", "sampler-service"), 8001)]:
+                while True:
+                    try:
+                        socket.create_connection((host, port), timeout=2)
+                        print(f"{host}:{port} is ready!")
+                        break
+                    except Exception:
+                        print(f"Waiting for {host}:{port}...")
+                        time.sleep(5)
+            '
+            python3 -u /app/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/rl_driver.py
+        volumeMounts:
+        - name: checkpoint-vol
+          mountPath: /checkpoint
+        env:
+        - name: TOKENIZER_PATH
+          value: "/checkpoint"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        # DNS Service Resolution instead of hardcoded IPs
+        - name: TRAINER_IP
+          value: "trainer-service"
+        - name: SAMPLER_IP
+          value: "sampler-service"
+        # Control scaling configuration directly via K8s Environment Variables
+        - name: PROMPTS_PER_STEP
+          value: "4"
+        - name: GROUP_SIZE
+          value: "4"
+        - name: TRAIN_EPOCHS
+          value: "32"
+        - name: PROMPT_LEN
+          value: "128"
+        - name: ROLLOUT_BATCH_SIZE
+          value: "8"
+        - name: TRAIN_BATCH_SIZE
+          value: "8"
+      volumes:
+      - name: checkpoint-vol
+        emptyDir: {}
