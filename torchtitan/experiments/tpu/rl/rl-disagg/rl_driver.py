@@ -139,15 +139,17 @@ def run_rl_loop():
         expanded_gt = [gt for gt in answers for _ in range(group_size)]
         
         micro_batch_size = int(os.environ.get("MICRO_BATCH_SIZE", "4"))
+        rollout_batch_size = int(os.environ.get("ROLLOUT_BATCH_SIZE", micro_batch_size))
+        train_batch_size = int(os.environ.get("TRAIN_BATCH_SIZE", micro_batch_size))
         
         # 1. Autoregressive Generation on Sampler VM (chunked into safe micro-batches to prevent TPU HBM OOM!)
         t0 = time.time()
         completed_ids = []
-        for i in range(0, len(prompt_ids_repeated), micro_batch_size):
-            chunk = prompt_ids_repeated[i : i + micro_batch_size]
+        for i in range(0, len(prompt_ids_repeated), rollout_batch_size):
+            chunk = prompt_ids_repeated[i : i + rollout_batch_size]
             res = requests.post(f"http://{SAMPLER_IP}:8001/generate", json={"prompt_ids": chunk})
             if res.status_code != 200:
-                print(f"Error generating micro-batch {i//micro_batch_size} from Sampler ({res.status_code}):", res.text)
+                print(f"Error generating micro-batch {i//rollout_batch_size} from Sampler ({res.status_code}):", res.text)
                 break
             completed_ids.extend(res.json()["completed_ids"])
         
@@ -169,7 +171,7 @@ def run_rl_loop():
             recent_rewards.pop(0)
         moving_avg_reward = sum(recent_rewards) / len(recent_rewards)
         
-        print(f"Generated {len(completed_ids)} completions ({len(completed_ids)//micro_batch_size} micro-batches) in {gen_time:.2f}s | "
+        print(f"Generated {len(completed_ids)} completions ({len(completed_ids)//rollout_batch_size} micro-batches) in {gen_time:.2f}s | "
               f"Reward: {mean_reward:.3f} (Moving Avg: {moving_avg_reward:.3f}) | Accuracy (Correct Rate): {reward_stats['correct_rate']:.2%} | Format Rate: {reward_stats['format_rate']:.2%}")
         
         # Print sample rollout for visibility
@@ -192,10 +194,10 @@ def run_rl_loop():
         total_kl = 0.0
         n_chunks = 0
         for epoch in range(train_epochs):
-            for i in range(0, len(prompt_ids_repeated), micro_batch_size):
-                p_chunk = prompt_ids_repeated[i : i + micro_batch_size]
-                c_chunk = completed_ids[i : i + micro_batch_size]
-                a_chunk = advantages[i : i + micro_batch_size]
+            for i in range(0, len(prompt_ids_repeated), train_batch_size):
+                p_chunk = prompt_ids_repeated[i : i + train_batch_size]
+                c_chunk = completed_ids[i : i + train_batch_size]
+                a_chunk = advantages[i : i + train_batch_size]
                 res = requests.post(f"http://{TRAINER_IP}:8000/train", json={
                     "prompt_ids": p_chunk,
                     "completed_ids": c_chunk,

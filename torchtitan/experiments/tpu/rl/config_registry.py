@@ -1,6 +1,7 @@
 # Copyright 2026 The TorchTitan Authors. All Rights Reserved.
 
 import dataclasses
+import os
 from torchtitan.components.metrics import MetricsProcessor
 from torchtitan.config.configs import ParallelismConfig
 
@@ -50,7 +51,7 @@ def grpo_qwen3_0_6b_glp() -> GRPOJobConfig:
       ),
       sampler=SamplerConfig(
           use_vllm=False,
-          max_new_tokens=256,
+          max_new_tokens=int(os.environ.get("MAX_NEW_TOKENS", "256")),
           use_separate_sampler_model=False,
           use_fake_sampler=False,
           temperature=0.7,
