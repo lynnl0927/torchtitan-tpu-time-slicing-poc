@@ -5,6 +5,7 @@ from torchtitan.components.metrics import MetricsProcessor
 from torchtitan.config.configs import ParallelismConfig
 
 from torchtitan.components.lr_scheduler import LRSchedulersContainer
+from torchtitan.components.optimizer import OptimizersContainer
 
 from torchtitan.experiments.tpu.rl.grpo_job_config import (
     GRPOConfig,
@@ -17,6 +18,7 @@ from torchtitan.experiments.tpu.rl.grpo_job_config import (
 from torchtitan.protocols.model_spec import ModelSpec
 from torchtitan.experiments.tpu.afmv7 import afmv7_args, parallelize_afmv7
 from torchtitan.experiments.tpu.qwen3 import parallelize_qwen3, qwen3_configs
+from torchtitan.models.qwen3.state_dict_adapter import Qwen3StateDictAdapter
 
 
 def grpo_qwen3_0_6b_glp() -> GRPOJobConfig:
@@ -30,7 +32,7 @@ def grpo_qwen3_0_6b_glp() -> GRPOJobConfig:
           parallelize_fn=parallelize_qwen3,
           pipelining_fn=None,
           post_optimizer_build_fn=None,
-          state_dict_adapter=None,
+          state_dict_adapter=Qwen3StateDictAdapter,
       ),
 
       model=ModelConfig(name="qwen3_tpu", flavor="0.6B"),
@@ -48,13 +50,15 @@ def grpo_qwen3_0_6b_glp() -> GRPOJobConfig:
       ),
       sampler=SamplerConfig(
           use_vllm=False,
-          max_new_tokens=128,
+          max_new_tokens=256,
           use_separate_sampler_model=False,
-          use_fake_sampler=True,
+          use_fake_sampler=False,
+          temperature=0.7,
       ),
       lr_scheduler=LRSchedulersContainer.Config(warmup_steps=4),
       metrics=MetricsProcessor.Config(log_freq=1),
       grpo=GRPOConfig(group_size=4, grpo_beta=0.1),
+      optimizer=OptimizersContainer.Config(lr=1e-6),
   )
 
 
@@ -68,7 +72,7 @@ def grpo_qwen3_1_7b_gf() -> GRPOJobConfig:
           parallelize_fn=parallelize_qwen3,
           pipelining_fn=None,
           post_optimizer_build_fn=None,
-          state_dict_adapter=None,
+          state_dict_adapter=Qwen3StateDictAdapter,
       ),
       model=ModelConfig(name="qwen3_tpu", flavor="1.7B"),
       training=GRPOTrainingConfig(
@@ -104,7 +108,7 @@ def grpo_qwen3_4b_gf() -> GRPOJobConfig:
           parallelize_fn=parallelize_qwen3,
           pipelining_fn=None,
           post_optimizer_build_fn=None,
-          state_dict_adapter=None,
+          state_dict_adapter=Qwen3StateDictAdapter,
       ),
       model=ModelConfig(name="qwen3_tpu", flavor="4B"),
       training=GRPOTrainingConfig(

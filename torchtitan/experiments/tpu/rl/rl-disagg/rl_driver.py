@@ -100,6 +100,8 @@ def run_rl_loop():
     tokenizer_path = os.environ.get("TOKENIZER_PATH")
     if not tokenizer_path:
         for p in [
+            os.path.expanduser("~/qwen3_checkpoint"),
+            os.path.expanduser("~/qwen_checkpoint"),
             "tests/assets/tokenizer",
             os.path.expanduser("~/torchtitan/tests/assets/tokenizer"),
             os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../../tests/assets/tokenizer")),
@@ -108,7 +110,7 @@ def run_rl_loop():
                 tokenizer_path = p
                 break
         if not tokenizer_path:
-            tokenizer_path = os.path.expanduser("~/torchtitan/tests/assets/tokenizer")
+            tokenizer_path = os.path.expanduser("~/qwen3_checkpoint")
             
     print(f"Loading TorchTitan tokenizer from '{tokenizer_path}'...")
     tokenizer = HuggingFaceTokenizer(tokenizer_path=tokenizer_path)
@@ -168,7 +170,7 @@ def run_rl_loop():
         moving_avg_reward = sum(recent_rewards) / len(recent_rewards)
         
         print(f"Generated {len(completed_ids)} completions ({len(completed_ids)//micro_batch_size} micro-batches) in {gen_time:.2f}s | "
-              f"Reward: {mean_reward:.3f} (Moving Avg: {moving_avg_reward:.3f} | Correct: {reward_stats['correct_rate']:.2%}, Format: {reward_stats['format_rate']:.2%})")
+              f"Reward: {mean_reward:.3f} (Moving Avg: {moving_avg_reward:.3f}) | Accuracy (Correct Rate): {reward_stats['correct_rate']:.2%} | Format Rate: {reward_stats['format_rate']:.2%}")
         
         # Print sample rollout for visibility
         if completions_text:
@@ -187,6 +189,7 @@ def run_rl_loop():
         # 3. Policy Gradient Backpropagation on Trainer VM (chunked into micro-batches across multiple PPO/GRPO epochs!)
         t0 = time.time()
         total_loss = 0.0
+        total_kl = 0.0
         n_chunks = 0
         for epoch in range(train_epochs):
             for i in range(0, len(prompt_ids_repeated), micro_batch_size):
@@ -201,14 +204,18 @@ def run_rl_loop():
                 if res.status_code != 200:
                     print(f"Error training epoch {epoch} micro-batch {i//micro_batch_size} on Trainer ({res.status_code}):", res.text)
                     break
-                total_loss += res.json()["loss"]
+                res_data = res.json()
+                total_loss += res_data["loss"]
+                total_kl += res_data.get("kl", 0.0)
                 n_chunks += 1
             
         if n_chunks == 0:
             print("Skipping step due to training errors.")
             continue
         loss = total_loss / n_chunks
-        print(f"Trained {n_chunks} micro-batches ({train_epochs} epochs) with avg GRPO loss {loss:.4f} in {time.time() - t0:.2f}s")
+        kl = total_kl / n_chunks
+        print(f"Trained {n_chunks} micro-batches ({train_epochs} epochs) in {time.time() - t0:.2f}s | "
+              f"Reward: {mean_reward:.3f} | Accuracy: {reward_stats['correct_rate']:.2%} | KL: {kl:.4f} | Loss: {loss:.4f}")
         
         # 4. Synchronous FSDP Checkpoint Export & Weight Sync
         t0 = time.time()

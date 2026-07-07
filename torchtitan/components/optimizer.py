@@ -43,7 +43,7 @@ class ParamGroupConfig:
     derived by multiplying the global optimizer values with the specified multipliers.
     """
 
-    pattern: str
+    pattern: str = ""
     """Regex pattern matched against parameter fully qualified names (FQNs).
     E.g. '.*bias$', '.*norm.*', '.*\\.embed_tokens\\..*'"""
 
@@ -124,7 +124,7 @@ class OptimizersContainer(Optimizer, Stateful, Configurable, Generic[T]):
         - more info: https://pytorch.org/docs/stable/optim.html
         """
 
-        param_groups: list[ParamGroupConfig] = field(default_factory=list)
+        param_groups: Any = ()
         """Optional per-parameter-group overrides. Each entry specifies a regex
         pattern matching parameter FQNs and multipliers for lr and weight_decay.
         Parameters not matching any pattern use the global defaults.

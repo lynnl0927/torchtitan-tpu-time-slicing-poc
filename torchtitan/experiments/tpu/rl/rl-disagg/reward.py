@@ -156,8 +156,13 @@ def compute_advantages(
     for i in range(n):
         grp = rewards[i * group_size : (i + 1) * group_size]
         mean = statistics.mean(grp)
-        std = statistics.stdev(grp) if len(grp) > 1 else 1.0
-        for r in grp:
-            advantages.append((r - mean) / (std + 1e-8))
+        std = statistics.pstdev(grp) if len(grp) > 1 else 0.0
+        if std < 1e-6:
+            # All rewards in this group are identical — no gradient signal
+            for r in grp:
+                advantages.append(0.0)
+        else:
+            for r in grp:
+                advantages.append((r - mean) / std)
         all_stats[i] = {"mean": round(mean, 4), "std": round(std, 4)}
     return advantages, all_stats

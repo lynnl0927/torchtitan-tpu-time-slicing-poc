@@ -172,11 +172,29 @@ def start_trainer(job_config: grpo_job_config.GRPOJobConfig) -> None:
         model.init_weights()
         ref_model.init_weights()
 
-    try:
-        with fsdp.FullyShardedDataParallel.summon_full_params(ref_model, recurse=True, writeback=True):
-            ref_model.load_state_dict(model.state_dict())
-    except Exception:
-        ref_model.load_state_dict(model.state_dict())
+    if job_config.checkpoint.initial_load_path:
+        job_config.checkpoint.initial_load_path = os.path.expanduser(job_config.checkpoint.initial_load_path)
+
+    if job_config.checkpoint.initial_load_path or (job_config.checkpoint.enable and os.path.exists(os.path.join(job_config.dump_folder, job_config.checkpoint.folder))):
+        logger.info("Loading initial checkpoint into trainer model using checkpointer...")
+        checkpointer = job_config.checkpoint.build(
+            dataloader=None,
+            model_parts=[model],
+            optimizers=None,
+            lr_schedulers=None,
+            states={},
+            sd_adapter=(
+                train_spec.state_dict_adapter(model_args, job_config.checkpoint.initial_load_path)
+                if hasattr(train_spec, "state_dict_adapter") and train_spec.state_dict_adapter
+                else None
+            ),
+            base_folder=job_config.dump_folder,
+        )
+        checkpointer.enable = True
+        checkpointer.load(step=job_config.checkpoint.load_step)
+
+    logger.info("Syncing weights from model to ref_model...")
+    grpo_utils.sync_model_weights(model, ref_model, parallel_dims)
 
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable_params, lr=job_config.optimizer.lr, eps=job_config.optimizer.eps, foreach=True)
@@ -203,6 +221,9 @@ def start_trainer(job_config: grpo_job_config.GRPOJobConfig) -> None:
             
             prompt_len = prompt_ids.shape[1]
             gen_targets = completed_ids[:, prompt_len:]
+            
+            # Action mask to ignore Qwen3 pad tokens (151643) and chat eos/pad tokens (151645)
+            action_mask = ((gen_targets != 151643) & (gen_targets != 151645)).float()
 
             model.eval()
             with torch.no_grad():
@@ -210,6 +231,7 @@ def start_trainer(job_config: grpo_job_config.GRPOJobConfig) -> None:
                 logits = outputs[0] if isinstance(outputs, tuple) else outputs
                 gen_logits = logits[:, prompt_len - 1 : -1, :]
                 token_log_probs = F.log_softmax(gen_logits, dim=-1).gather(2, gen_targets.unsqueeze(-1)).squeeze(-1)
+                torch_tpu._internal.sync.synchronize(token_log_probs, wait=True)
             model.train()
 
             ref_model.eval()
@@ -220,29 +242,47 @@ def start_trainer(job_config: grpo_job_config.GRPOJobConfig) -> None:
                 ref_token_log_probs = F.log_softmax(gen_ref_logits, dim=-1).gather(2, gen_targets.unsqueeze(-1)).squeeze(-1)
                 torch_tpu._internal.sync.synchronize(ref_token_log_probs, wait=True)
 
+            total_loss = 0.0
+            total_kl = 0.0
             for epoch in range(job_config.grpo.ppo_epochs):
                 optimizer.zero_grad()
-                loss = grpo_utils.compute_grpo_loss(
+                loss, kl = grpo_utils.compute_grpo_loss(
                     model, prompt_ids, completed_ids, ref_log_probs=ref_token_log_probs,
-                    advantages=advantages, ppo_clip_eps=job_config.grpo.ppo_clip_eps,
+                    advantages=advantages, old_log_probs=token_log_probs,
+                    action_mask=action_mask,
+                    ppo_clip_eps=job_config.grpo.ppo_clip_eps,
                     grpo_beta=job_config.grpo.grpo_beta,
+                    return_kl=True,
                 )
                 loss.backward()
                 optimizer.step()
                 torch_tpu._internal.sync.synchronize(loss, wait=True)
+                torch_tpu._internal.sync.synchronize(kl, wait=True)
+                total_loss += loss.detach().cpu().item()
+                total_kl += kl.detach().cpu().item()
             
             if rank == 0:
-                logger.info(f"[SPMD LOOP RANK 0]: 'train' completed in {time.time() - t0:.2f}s! Loss: {loss.cpu().item():.4f}")
-                response_queue.put({"status": "ok", "loss": loss.cpu().item()})
+                avg_loss = total_loss / max(job_config.grpo.ppo_epochs, 1)
+                avg_kl = total_kl / max(job_config.grpo.ppo_epochs, 1)
+                logger.info(f"[SPMD LOOP RANK 0]: 'train' completed in {time.time() - t0:.2f}s! Loss: {avg_loss:.4f}, KL: {avg_kl:.4f}")
+                response_queue.put({"status": "ok", "loss": avg_loss, "kl": avg_kl})
 
         elif cmd == "export":
             if rank == 0:
                 logger.info("[SPMD LOOP RANK 0]: Received 'export_weights' command! Saving checkpoint...")
             t0 = time.time()
-            with fsdp.FullyShardedDataParallel.summon_full_params(model, recurse=True, writeback=False):
-                if rank == 0:
-                    torch.save(model.state_dict(), "/tmp/trainer_weights.pt")
+            # All ranks must participate in full_tensor() collective (all-gather)
+            sd = model.state_dict()
+            cpu_sd = {}
+            for k, v in sd.items():
+                if hasattr(v, 'full_tensor'):
+                    cpu_sd[k] = v.full_tensor().cpu()
+                elif hasattr(v, 'cpu'):
+                    cpu_sd[k] = v.cpu()
+                else:
+                    cpu_sd[k] = v
             if rank == 0:
+                torch.save(cpu_sd, "/tmp/trainer_weights.pt")
                 logger.info(f"[SPMD LOOP RANK 0]: 'export_weights' completed in {time.time() - t0:.2f}s!")
                 response_queue.put({"status": "ok"})
 

@@ -80,9 +80,11 @@ def compute_grpo_loss(
     ref_log_probs: torch.Tensor,
     advantages: torch.Tensor,
     old_log_probs: torch.Tensor | None = None,
+    action_mask: torch.Tensor | None = None,
     ppo_clip_eps: float = 0.2,
     grpo_beta: float = 0.1,
-) -> torch.Tensor:
+    return_kl: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
   """Compute GRPO loss with KL penalty."""
   outputs = model(completed_ids)
 
@@ -111,12 +113,26 @@ def compute_grpo_loss(
   unclipped_loss = ratio * advantages
   clipped_ratio = torch.clamp(ratio, 1 - ppo_clip_eps, 1 + ppo_clip_eps)
   clipped_loss = clipped_ratio * advantages
-  pg_loss = -torch.min(unclipped_loss, clipped_loss).mean()
+  token_pg_loss = -torch.min(unclipped_loss, clipped_loss)
 
   # KL penalty uses ref_log_probs (from separate ref model or saved from
   # generation)
   kl_log_ratio = token_log_probs - ref_log_probs
-  kl = torch.exp(-kl_log_ratio) + kl_log_ratio - 1.0
-  loss = pg_loss + grpo_beta * kl.mean()
+  kl_log_ratio = torch.clamp(kl_log_ratio, -20.0, 20.0)
+  token_kl = torch.exp(-kl_log_ratio) + kl_log_ratio - 1.0
+  
+  if action_mask is not None:
+    # Ensure action_mask is same shape as token_pg_loss (batch_size, gen_len)
+    action_mask = action_mask.float()
+    pg_loss = (token_pg_loss * action_mask).sum() / torch.clamp(action_mask.sum(), min=1e-5)
+    kl = (token_kl * action_mask).sum() / torch.clamp(action_mask.sum(), min=1e-5)
+  else:
+    pg_loss = token_pg_loss.mean()
+    kl = token_kl.mean()
+    
+  loss = pg_loss + grpo_beta * kl
 
+  if return_kl:
+    return loss, kl
   return loss
+

@@ -163,6 +163,28 @@ def start_sampler(job_config: grpo_job_config.GRPOJobConfig) -> None:
 
     with torch.no_grad():
         sampler_model.init_weights()
+
+    if job_config.checkpoint.initial_load_path:
+        job_config.checkpoint.initial_load_path = os.path.expanduser(job_config.checkpoint.initial_load_path)
+
+    if job_config.checkpoint.initial_load_path or (job_config.checkpoint.enable and os.path.exists(os.path.join(job_config.dump_folder, job_config.checkpoint.folder))):
+        logger.info("Loading initial checkpoint into sampler model using checkpointer...")
+        checkpointer = job_config.checkpoint.build(
+            dataloader=None,
+            model_parts=[sampler_model],
+            optimizers=None,
+            lr_schedulers=None,
+            states={},
+            sd_adapter=(
+                train_spec.state_dict_adapter(model_args, job_config.checkpoint.initial_load_path)
+                if hasattr(train_spec, "state_dict_adapter") and train_spec.state_dict_adapter
+                else None
+            ),
+            base_folder=job_config.dump_folder,
+        )
+        checkpointer.enable = True
+        checkpointer.load(step=job_config.checkpoint.load_step)
+
     for p in sampler_model.parameters():
         p.requires_grad = False
 
@@ -200,8 +222,18 @@ def start_sampler(job_config: grpo_job_config.GRPOJobConfig) -> None:
                 logger.info("[SPMD LOOP RANK 0]: Received 'update_weights' command! Reloading state dict...")
             t0 = time.time()
             state_dict = torch.load("/tmp/trainer_weights.pt", map_location="cpu")
-            with fsdp.FullyShardedDataParallel.summon_full_params(sampler_model, recurse=True, writeback=True):
-                sampler_model.load_state_dict(state_dict)
+            # Convert plain CPU tensors to DTensors matching the sampler model's mesh
+            from torch.distributed.tensor import DTensor, distribute_tensor
+            model_sd = sampler_model.state_dict()
+            dtensor_sd = {}
+            for k, v in state_dict.items():
+                if k in model_sd and isinstance(model_sd[k], DTensor):
+                    mesh = model_sd[k].device_mesh
+                    placements = model_sd[k].placements
+                    dtensor_sd[k] = distribute_tensor(v.to(device), device_mesh=mesh, placements=placements)
+                else:
+                    dtensor_sd[k] = v.to(device) if hasattr(v, 'to') else v
+            sampler_model.load_state_dict(dtensor_sd)
             if rank == 0:
                 logger.info(f"[SPMD LOOP RANK 0]: 'update_weights' completed in {time.time() - t0:.2f}s!")
                 response_queue.put({"status": "ok"})

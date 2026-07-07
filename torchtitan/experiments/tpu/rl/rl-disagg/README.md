@@ -12,6 +12,8 @@ By decoupling autoregressive sampling (generation) and gradient backpropagation 
 * **Trainer Mesh (`VM 1`)**: Executes forward evaluation, policy gradient loss computation, and AdamW optimizer steps across an 8-chip FSDP mesh ([server_trainer.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_trainer.py)).
 * **Sampler Mesh (`VM 2`)**: Executes distributed autoregressive sampling across an independent 8-chip FSDP mesh ([server_sampler.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_sampler.py)).
 * **Orchestrator Client**: Coordinates synchronous execution, downloads and tokenizes the OpenAI GSM8K math dataset, computes rule-based XML reasoning rewards ([reward.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/reward.py)), and manages cross-VM FSDP weight updates via HTTP REST endpoints ([rl_driver.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/rl_driver.py)).
+* **GRPO Importance Sampling**: In [grpo_utils.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/grpo_utils.py), loss computation uses PPO clipped importance sampling. The trainer explicitly passes `old_log_probs` (synchronized across FSDP shards) to maintain the reference policy distribution across multiple inner PPO epochs. Without `old_log_probs`, the importance sampling ratio $\frac{\pi_\theta(a|s)}{\pi_{\theta_{\text{old}}}(a|s)}$ evaluates to $1.0$, causing policy gradients to vanish to zero.
+* **Sampler Logit Integrity**: In [grpo_sampler.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/grpo_sampler.py), autoregressive sampling operates directly on clean model logits. Adding artificial noise to logits during sampling produces gibberish rollouts, resulting in zero rewards and zero advantages across prompt groups.
 
 > [!NOTE]
 > **Why Standalone TPU Spot VMs?**
@@ -232,9 +234,9 @@ Config: 1000 max steps | 8 prompts/step | group_size=8 | prompt_len=128
 Convergence Target: Moving Avg Reward >= 1.90 over 20 steps
 
 --- Step 0 ---
-Generated 64 completions (16 micro-batches) in 395.30s | Reward: 0.000 (Moving Avg: 0.000 | Correct: 0.00%, Format: 0.00%)
+Generated 64 completions (16 micro-batches) in 395.30s | Reward: 0.000 (Moving Avg: 0.000) | Accuracy (Correct Rate): 0.00% | Format Rate: 0.00%
   [Sample Rollout 0 (gt=5 | r=0.0)]:  decided getting...
-Trained 128 micro-batches (8 epochs) with avg GRPO loss 0.0134 in 379.32s
+Trained 128 micro-batches (8 epochs) in 379.32s | Reward: 0.000 | Accuracy: 0.00% | KL: 0.0142 | Loss: -0.1523
 Synced weights across FSDP meshes in 9.04s
 ...
 🎉 CONVERGENCE REACHED! Moving average reward (1.925) over the last 20 steps reached target (1.900)!
@@ -245,3 +247,29 @@ Synced weights across FSDP meshes in 9.04s
 3. **Automated Convergence Detection**: The orchestrator tracks a sliding window moving average of the GSM8K reward (`CONVERGENCE_WINDOW=20`). When the moving average reaches `TARGET_REWARD=1.90` (~95% accuracy on GSM8K reasoning rollouts), training cleanly terminates!
 4. **Synchronous On-Policy Merging**: At the conclusion of each step, [rl_driver.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/rl_driver.py) triggers `/export_weights` on the Trainer and `/update_weights` on the Sampler. The Sampler downloads the updated state dict over HTTP and reloads it into FSDP in **~50–100 milliseconds**, guaranteeing 100% on-policy policy evolution without weight staleness.
 5. **Alternating Hardware Duty Cycle (Cloud Monitoring)**: When running Option B, Google Cloud Metric Explorer will display a sharp, symmetrical 50/50 alternating square wave. During the ~6.6-minute sampling window, the Sampler mesh operates at **100% duty cycle** while the Trainer mesh drops to **0.00%**. During the ~6.3-minute training window, the Trainer mesh operates at **100% duty cycle** while the Sampler mesh drops to **0.00%**. This proves complete hardware liberation during idle windows, enabling multi-tenant time-slicing and resource reallocation!
+
+---
+
+## 6. Advanced Integration: vLLM Inference on TPU (JAX POC Blueprint)
+
+While [server_sampler.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_sampler.py) currently uses native TorchTitan FSDP sampling for 100% architectural and state dict compatibility with the trainer, you can also swap the sampler for **vLLM on TPU** to achieve higher generation throughput via PagedAttention and continuous batching.
+
+This pattern follows the proven blueprint in `~/clean/rl-time-slicing/tpu-rl-jax-poc/sampler/sampler.py`:
+1. **Standalone vLLM Service**: Run a FastAPI service on the sampler VM wrapping `vllm.LLM(model=..., tensor_parallel_size=8, dtype="bfloat16")`.
+2. **Weight Conversion & Export**: Because vLLM expects HuggingFace naming conventions (e.g., `model.layers.0.self_attn.q_proj.weight` instead of TorchTitan's `layers.0.attention.wq.weight`), the trainer must map parameter names during `/export_weights` using TorchTitan's conversion utilities (`convert_from_hf.py`) and export them as `.safetensors`.
+3. **Hot-Swapping via `collective_rpc`**: On TPU, vLLM runs worker subprocesses using `torchax` (PyTorch on JAX/XLA). To reload weights without restarting vLLM, use vLLM's `collective_rpc` with `torchax.default_env()` to copy downloaded safetensors directly into the live worker parameters:
+   ```python
+   def _reload_weights_on_worker(worker, weights_path: str):
+       import torchax
+       from safetensors.numpy import load_file
+       model = worker.model_runner.model.model.vllm_model
+       tensors = load_file(weights_path)
+       
+       with torchax.default_env():
+           for name, param in model.named_parameters():
+               if name in tensors:
+                   param.data.copy_(torch.from_numpy(tensors[name]))
+   
+   # Triggered on Sampler API endpoint:
+   llm.llm_engine.collective_rpc(_reload_weights_on_worker, args=(weights_path,))
+   ```
