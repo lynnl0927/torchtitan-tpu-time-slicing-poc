@@ -126,6 +126,12 @@ def run_rl_loop():
     print(f"Convergence Target: Moving Avg Reward >= {target_reward:.2f} over {window_size} steps")
     print("-" * 70)
     
+    print("Taking initial baseline checkpoints for Sampler and Trainer...", flush=True)
+    requests.post(f"http://{SAMPLER_IP}:8001/checkpoint")
+    print("Sampler baseline checkpoint done.", flush=True)
+    requests.post(f"http://{TRAINER_IP}:8000/checkpoint")
+    print("Trainer baseline checkpoint done.", flush=True)
+    
     recent_rewards = []
     
     for step in range(num_steps):
@@ -144,6 +150,9 @@ def run_rl_loop():
         
         # 1. Autoregressive Generation on Sampler VM (chunked into safe micro-batches to prevent TPU HBM OOM!)
         t0 = time.time()
+        print(f"[{time.strftime('%H:%M:%S')}] Restoring Sampler state...", flush=True)
+        requests.post(f"http://{SAMPLER_IP}:8001/restore")
+        print(f"[{time.strftime('%H:%M:%S')}] Sampler restored. Starting generation...", flush=True)
         completed_ids = []
         for i in range(0, len(prompt_ids_repeated), rollout_batch_size):
             chunk = prompt_ids_repeated[i : i + rollout_batch_size]
@@ -152,6 +161,9 @@ def run_rl_loop():
                 print(f"Error generating micro-batch {i//rollout_batch_size} from Sampler ({res.status_code}):", res.text)
                 break
             completed_ids.extend(res.json()["completed_ids"])
+        print(f"[{time.strftime('%H:%M:%S')}] Checkpointing Sampler state...", flush=True)
+        requests.post(f"http://{SAMPLER_IP}:8001/checkpoint")
+        print(f"[{time.strftime('%H:%M:%S')}] Sampler checkpointed.", flush=True)
         
         if len(completed_ids) < len(prompt_ids_repeated):
             print("Skipping step due to generation errors in micro-batching.")
@@ -190,6 +202,9 @@ def run_rl_loop():
         
         # 3. Policy Gradient Backpropagation on Trainer VM (chunked into micro-batches across multiple PPO/GRPO epochs!)
         t0 = time.time()
+        print(f"[{time.strftime('%H:%M:%S')}] Restoring Trainer state...", flush=True)
+        requests.post(f"http://{TRAINER_IP}:8000/restore")
+        print(f"[{time.strftime('%H:%M:%S')}] Trainer restored. Starting training...", flush=True)
         total_loss = 0.0
         total_kl = 0.0
         n_chunks = 0
@@ -220,10 +235,21 @@ def run_rl_loop():
               f"Reward: {mean_reward:.3f} | Accuracy: {reward_stats['correct_rate']:.2%} | KL: {kl:.4f} | Loss: {loss:.4f}")
         
         # 4. Synchronous FSDP Checkpoint Export & Weight Sync
-        t0 = time.time()
+        t0_sync = time.time()
+        print(f"[{time.strftime('%H:%M:%S')}] Exporting weights from Trainer...", flush=True)
         requests.post(f"http://{TRAINER_IP}:8000/export_weights")
+        print(f"[{time.strftime('%H:%M:%S')}] Checkpointing Trainer state...", flush=True)
+        requests.post(f"http://{TRAINER_IP}:8000/checkpoint")
+        print(f"[{time.strftime('%H:%M:%S')}] Trainer checkpointed.", flush=True)
+        
+        print(f"[{time.strftime('%H:%M:%S')}] Restoring Sampler state for weight update...", flush=True)
+        requests.post(f"http://{SAMPLER_IP}:8001/restore")
+        print(f"[{time.strftime('%H:%M:%S')}] Updating Sampler weights...", flush=True)
         requests.post(f"http://{SAMPLER_IP}:8001/update_weights", json={"trainer_ip": TRAINER_IP})
-        print(f"Synced weights across FSDP meshes in {time.time() - t0:.2f}s")
+        print(f"[{time.strftime('%H:%M:%S')}] Checkpointing updated Sampler state...", flush=True)
+        requests.post(f"http://{SAMPLER_IP}:8001/checkpoint")
+        print(f"[{time.strftime('%H:%M:%S')}] Sampler checkpointed.", flush=True)
+        print(f"Synced weights across FSDP meshes in {time.time() - t0_sync:.2f}s")
 
     print("\n" + "=" * 70)
     print("Disaggregated GSM8K GRPO training loop completed successfully!")

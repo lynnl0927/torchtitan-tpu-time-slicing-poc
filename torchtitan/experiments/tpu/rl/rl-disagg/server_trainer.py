@@ -97,6 +97,18 @@ def fastapi_server():
             request_queue.put(("train", data))
             return response_queue.get()
             
+        @app.post("/checkpoint")
+        def checkpoint():
+            import tpu_hal_snapshot
+            tpu_hal_snapshot.checkpoint_tpu()
+            return {"status": "ok"}
+            
+        @app.post("/restore")
+        def restore():
+            import tpu_hal_snapshot
+            tpu_hal_snapshot.restore_tpu()
+            return {"status": "ok"}
+
         @app.post("/export_weights")
         def export_weights():
             request_queue.put(("export", {}))

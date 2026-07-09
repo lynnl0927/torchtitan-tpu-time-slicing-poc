@@ -43,7 +43,8 @@ spec:
         cloud.google.com/gke-tpu-topology: 2x4  # standard for single-host 8-chip v6e
       initContainers:
       - name: download-model
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:latest
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        imagePullPolicy: Always
         command: ["/bin/bash", "-c"]
         args:
           - "pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint"
@@ -52,7 +53,8 @@ spec:
           mountPath: /checkpoint
       containers:
       - name: trainer
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:latest
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        imagePullPolicy: Always
         command: ["python3", "-m", "torch.distributed.run"]
         args: 
           - "--nproc_per_node=8"
@@ -97,7 +99,8 @@ spec:
         cloud.google.com/gke-tpu-topology: 2x4
       initContainers:
       - name: download-model
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:latest
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        imagePullPolicy: Always
         command: ["/bin/bash", "-c"]
         args:
           - "pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint"
@@ -106,7 +109,8 @@ spec:
           mountPath: /checkpoint
       containers:
       - name: sampler
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:latest
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        imagePullPolicy: Always
         command: ["python3", "-m", "torch.distributed.run"]
         args: 
           - "--nproc_per_node=8"
@@ -149,7 +153,8 @@ spec:
       # Runs on a standard CPU node (does not request TPU)
       initContainers:
       - name: download-model
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:latest
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        imagePullPolicy: Always
         command: ["/bin/bash", "-c"]
         args:
           - "pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint"
@@ -158,7 +163,8 @@ spec:
           mountPath: /checkpoint
       containers:
       - name: driver
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:latest
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        imagePullPolicy: Always
         command: ["/bin/bash", "-c"]
         args: 
           - |
