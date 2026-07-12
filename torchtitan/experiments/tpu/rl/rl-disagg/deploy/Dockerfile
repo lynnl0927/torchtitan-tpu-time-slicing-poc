@@ -5,6 +5,9 @@ RUN apt-get update && apt-get install -y git build-essential curl && rm -rf /var
 
 WORKDIR /app
 
+# Install grpcurl globally
+RUN curl -sL https://github.com/fullstorydev/grpcurl/releases/download/v1.9.1/grpcurl_1.9.1_linux_x86_64.tar.gz | tar -xz -C /usr/local/bin grpcurl
+
 # Upgrade pip
 RUN pip install --no-cache-dir --upgrade pip
 
@@ -32,8 +35,8 @@ RUN pip install --no-cache-dir --pre --no-deps \
 COPY . /app/torchtitan
 WORKDIR /app/torchtitan
 
-# 7.5 Download the custom UDS-enabled libtpu from GCS
-RUN curl -sL -H "Authorization: Bearer ${GCP_TOKEN}" -o /app/_libtpu.so https://storage.googleapis.com/linglinll-gke-dev-libtpu/_libtpu.so
+# 7.5 Copy the custom UDS-enabled libtpu directly
+COPY _libtpu.so /app/_libtpu.so
 
 # 8. Install TorchTitan project dependencies
 RUN pip install --no-cache-dir -r requirements.txt
@@ -42,3 +45,6 @@ RUN pip install --no-cache-dir 'typeguard==2.13.3'
 
 # 9. Set the environment variable for Python
 ENV PYTHONPATH=/app/torchtitan:$PYTHONPATH
+
+# 10. Set the custom TPU library path
+ENV TPU_LIBRARY_PATH=/app/_libtpu.so

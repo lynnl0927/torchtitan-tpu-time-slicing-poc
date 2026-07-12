@@ -38,6 +38,7 @@ import socket
 class CPUCommandBroadcast:
     """Broadcasts SPMD commands over CPU TCP sockets on localhost to keep TPU 100% idle while waiting!"""
     def __init__(self, rank: int, world_size: int, port: int = 18001):
+        port = int(os.environ.get("BROADCAST_PORT", port))
         self.rank = rank
         self.world_size = world_size
         self.port = port
@@ -84,7 +85,8 @@ class CPUCommandBroadcast:
 
 def fastapi_server():
     try:
-        print("\n[FASTAPI THREAD]: Starting Sampler HTTP server on port 8001...", flush=True)
+        port = int(os.environ.get("SERVER_PORT", 8001))
+        print(f"\n[FASTAPI THREAD]: Starting Sampler HTTP server on port {port}...", flush=True)
         import uvicorn
         from fastapi import FastAPI, Request
         
@@ -107,25 +109,32 @@ def fastapi_server():
             import tpu_hal_snapshot
             tpu_hal_snapshot.restore_tpu()
             return {"status": "ok"}
+            
+        @app.post("/start")
+        def start_tpu():
+            open("/tmp/start_tpu", "w").close()
+            return {"status": "ok"}
 
         @app.post("/update_weights")
         async def update_weights(req: Request):
             data = await req.json()
             # Download weights on API thread before telling SPMD workers to load
             trainer_ip = data.get("trainer_ip", "localhost")
-            r = requests.get(f"http://{trainer_ip}:8000/weights")
+            trainer_port = data.get("trainer_port", 8000)
+            r = requests.get(f"http://{trainer_ip}:{trainer_port}/weights")
             with open("/tmp/trainer_weights.pt", "wb") as f:
                 f.write(r.content)
             
             request_queue.put(("update_weights", {}))
             return response_queue.get()
             
-        config = uvicorn.Config(app, host="0.0.0.0", port=8001, log_level="info")
+        port = int(os.environ.get("SERVER_PORT", 8001))
+        config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
         server = uvicorn.Server(config)
         server.install_signal_handlers = lambda: None
-        print("[FASTAPI THREAD]: Calling server.run() on port 8001...", flush=True)
+        print(f"[FASTAPI THREAD]: Calling server.run() on port {port}...", flush=True)
         server.run()
-        print("[FASTAPI THREAD]: server.run() has EXITED on port 8001!", flush=True)
+        print(f"[FASTAPI THREAD]: server.run() has EXITED on port {port}!", flush=True)
     except Exception as e:
         print(f"\n[FATAL ERROR IN SAMPLER FASTAPI THREAD]: {e}\n", flush=True)
         import traceback
@@ -138,6 +147,14 @@ def start_sampler(job_config: grpo_job_config.GRPOJobConfig) -> None:
     if rank == 0:
         torchtitan.tools.logging.init_logger()
         threading.Thread(target=fastapi_server, daemon=True).start()
+
+    if os.environ.get("DEFER_INIT") == "true":
+        if rank == 0:
+            logger.info("DEFER_INIT=true: Waiting for /start signal before initializing TPU...")
+        while not os.path.exists("/tmp/start_tpu"):
+            time.sleep(1)
+        if rank == 0:
+            logger.info("Received /start signal! Proceeding with TPU initialization...")
 
     device = tpu_utils.get_device()
 
@@ -201,7 +218,7 @@ def start_sampler(job_config: grpo_job_config.GRPOJobConfig) -> None:
         p.requires_grad = False
 
     logger.info("Sampler model initialized. Entering CPU-idle SPMD control loop.")
-    cpu_broadcast = CPUCommandBroadcast(rank, world_size, port=18001)
+    cpu_broadcast = CPUCommandBroadcast(rank, world_size, port=int(os.environ.get("BROADCAST_PORT", 18001)))
     while True:
         cmd_list = [None, None]
         if rank == 0:

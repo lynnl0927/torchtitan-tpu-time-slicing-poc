@@ -17,13 +17,18 @@ import sys
 import time
 import urllib.request
 import requests
+import uuid
 
 # Import TorchTitan tokenizer and local GSM8K reward functions
 from torchtitan.components.tokenizer import HuggingFaceTokenizer
 from reward import compute_rewards, compute_advantages, extract_answer
 
 TRAINER_IP = os.environ.get("TRAINER_IP", "127.0.0.1")
+TRAINER_PORT = int(os.environ.get("TRAINER_PORT", "8000"))
 SAMPLER_IP = os.environ.get("SAMPLER_IP", "127.0.0.1")
+SAMPLER_PORT = int(os.environ.get("SAMPLER_PORT", "8001"))
+ORCHESTRATOR_IP = os.environ.get("ORCHESTRATOR_IP", "127.0.0.1")
+JOB_ID = os.environ.get("JOB_ID", str(uuid.uuid4()))
 GSM8K_URL = "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/train.jsonl"
 DATASET_PATH = os.environ.get("DATASET_PATH", "/tmp/gsm8k_prompts.json")
 
@@ -90,8 +95,8 @@ def sample_batch(dataset, n, tokenizer, prompt_len=128):
 def run_rl_loop():
     print("=" * 70)
     print(f"Disaggregated TPU GRPO RL Orchestrator (GSM8K Real Dataset)")
-    print(f"  Trainer VM: http://{TRAINER_IP}:8000")
-    print(f"  Sampler VM: http://{SAMPLER_IP}:8001")
+    print(f"  Trainer VM: http://{TRAINER_IP}:{TRAINER_PORT}")
+    print(f"  Sampler VM: http://{SAMPLER_IP}:{SAMPLER_PORT}")
     print("=" * 70)
     
     dataset = load_dataset()
@@ -126,13 +131,24 @@ def run_rl_loop():
     print(f"Convergence Target: Moving Avg Reward >= {target_reward:.2f} over {window_size} steps")
     print("-" * 70)
     
-    print("Taking initial baseline checkpoints for Sampler and Trainer...", flush=True)
-    requests.post(f"http://{SAMPLER_IP}:8001/checkpoint")
-    print("Sampler baseline checkpoint done.", flush=True)
-    requests.post(f"http://{TRAINER_IP}:8000/checkpoint")
-    print("Trainer baseline checkpoint done.", flush=True)
+    print("Registering workloads with Orchestrator...", flush=True)
+    requests.post(f"http://{ORCHESTRATOR_IP}:9000/register", json={
+        "workload_id": f"{JOB_ID}_sampler",
+        "pool": "sampler",
+        "pids": [],
+        "url": f"http://{SAMPLER_IP}:{SAMPLER_PORT}",
+        "checkpointed": False
+    })
+    requests.post(f"http://{ORCHESTRATOR_IP}:9000/register", json={
+        "workload_id": f"{JOB_ID}_trainer",
+        "pool": "trainer",
+        "pids": [],
+        "url": f"http://{TRAINER_IP}:{TRAINER_PORT}",
+        "checkpointed": False
+    })
     
     recent_rewards = []
+    holding_sampler = False
     
     for step in range(num_steps):
         print(f"\n--- Step {step} ---")
@@ -150,20 +166,26 @@ def run_rl_loop():
         
         # 1. Autoregressive Generation on Sampler VM (chunked into safe micro-batches to prevent TPU HBM OOM!)
         t0 = time.time()
-        print(f"[{time.strftime('%H:%M:%S')}] Restoring Sampler state...", flush=True)
-        requests.post(f"http://{SAMPLER_IP}:8001/restore")
-        print(f"[{time.strftime('%H:%M:%S')}] Sampler restored. Starting generation...", flush=True)
+        if not holding_sampler:
+            print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Acquiring Sampler lock...", flush=True)
+            requests.post(f"http://{ORCHESTRATOR_IP}:9000/acquire", json={"workload_id": f"{JOB_ID}_sampler"})
+            requests.post(f"http://{SAMPLER_IP}:{SAMPLER_PORT}/start")
+            print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Sampler restored. Starting generation...", flush=True)
+        else:
+            print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Sampler lock already held. Starting generation...", flush=True)
+
         completed_ids = []
         for i in range(0, len(prompt_ids_repeated), rollout_batch_size):
             chunk = prompt_ids_repeated[i : i + rollout_batch_size]
-            res = requests.post(f"http://{SAMPLER_IP}:8001/generate", json={"prompt_ids": chunk})
+            res = requests.post(f"http://{SAMPLER_IP}:{SAMPLER_PORT}/generate", json={"prompt_ids": chunk})
             if res.status_code != 200:
                 print(f"Error generating micro-batch {i//rollout_batch_size} from Sampler ({res.status_code}):", res.text)
                 break
             completed_ids.extend(res.json()["completed_ids"])
-        print(f"[{time.strftime('%H:%M:%S')}] Checkpointing Sampler state...", flush=True)
-        requests.post(f"http://{SAMPLER_IP}:8001/checkpoint")
-        print(f"[{time.strftime('%H:%M:%S')}] Sampler checkpointed.", flush=True)
+        print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Yielding Sampler lock...", flush=True)
+        requests.post(f"http://{ORCHESTRATOR_IP}:9000/yield", json={"workload_id": f"{JOB_ID}_sampler"})
+        print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Sampler checkpointed and yielded.", flush=True)
+        holding_sampler = False
         
         if len(completed_ids) < len(prompt_ids_repeated):
             print("Skipping step due to generation errors in micro-batching.")
@@ -202,9 +224,10 @@ def run_rl_loop():
         
         # 3. Policy Gradient Backpropagation on Trainer VM (chunked into micro-batches across multiple PPO/GRPO epochs!)
         t0 = time.time()
-        print(f"[{time.strftime('%H:%M:%S')}] Restoring Trainer state...", flush=True)
-        requests.post(f"http://{TRAINER_IP}:8000/restore")
-        print(f"[{time.strftime('%H:%M:%S')}] Trainer restored. Starting training...", flush=True)
+        print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Acquiring Trainer lock...", flush=True)
+        requests.post(f"http://{ORCHESTRATOR_IP}:9000/acquire", json={"workload_id": f"{JOB_ID}_trainer"})
+        requests.post(f"http://{TRAINER_IP}:{TRAINER_PORT}/start")
+        print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Trainer restored. Starting training...", flush=True)
         total_loss = 0.0
         total_kl = 0.0
         n_chunks = 0
@@ -213,7 +236,7 @@ def run_rl_loop():
                 p_chunk = prompt_ids_repeated[i : i + train_batch_size]
                 c_chunk = completed_ids[i : i + train_batch_size]
                 a_chunk = advantages[i : i + train_batch_size]
-                res = requests.post(f"http://{TRAINER_IP}:8000/train", json={
+                res = requests.post(f"http://{TRAINER_IP}:{TRAINER_PORT}/train", json={
                     "prompt_ids": p_chunk,
                     "completed_ids": c_chunk,
                     "advantages": a_chunk
@@ -236,19 +259,18 @@ def run_rl_loop():
         
         # 4. Synchronous FSDP Checkpoint Export & Weight Sync
         t0_sync = time.time()
-        print(f"[{time.strftime('%H:%M:%S')}] Exporting weights from Trainer...", flush=True)
-        requests.post(f"http://{TRAINER_IP}:8000/export_weights")
-        print(f"[{time.strftime('%H:%M:%S')}] Checkpointing Trainer state...", flush=True)
-        requests.post(f"http://{TRAINER_IP}:8000/checkpoint")
-        print(f"[{time.strftime('%H:%M:%S')}] Trainer checkpointed.", flush=True)
+        print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Exporting weights from Trainer...", flush=True)
+        requests.post(f"http://{TRAINER_IP}:{TRAINER_PORT}/export_weights")
+        print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Yielding Trainer lock...", flush=True)
+        requests.post(f"http://{ORCHESTRATOR_IP}:9000/yield", json={"workload_id": f"{JOB_ID}_trainer"})
+        print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Trainer checkpointed and yielded.", flush=True)
         
-        print(f"[{time.strftime('%H:%M:%S')}] Restoring Sampler state for weight update...", flush=True)
-        requests.post(f"http://{SAMPLER_IP}:8001/restore")
-        print(f"[{time.strftime('%H:%M:%S')}] Updating Sampler weights...", flush=True)
-        requests.post(f"http://{SAMPLER_IP}:8001/update_weights", json={"trainer_ip": TRAINER_IP})
-        print(f"[{time.strftime('%H:%M:%S')}] Checkpointing updated Sampler state...", flush=True)
-        requests.post(f"http://{SAMPLER_IP}:8001/checkpoint")
-        print(f"[{time.strftime('%H:%M:%S')}] Sampler checkpointed.", flush=True)
+        print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Acquiring Sampler lock for weight update...", flush=True)
+        requests.post(f"http://{ORCHESTRATOR_IP}:9000/acquire", json={"workload_id": f"{JOB_ID}_sampler"})
+        print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Updating Sampler weights...", flush=True)
+        requests.post(f"http://{SAMPLER_IP}:{SAMPLER_PORT}/update_weights", json={"trainer_ip": TRAINER_IP, "trainer_port": TRAINER_PORT})
+        print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Sampler holding lock for next iteration.", flush=True)
+        holding_sampler = True
         print(f"Synced weights across FSDP meshes in {time.time() - t0_sync:.2f}s")
 
     print("\n" + "=" * 70)

@@ -1,70 +1,108 @@
-# 1. Trainer Headless Service
 apiVersion: v1
 kind: Service
 metadata:
-  name: trainer-service
-spec:
-  clusterIP: None 
-  selector:
-    app: trainer
-  ports:
-    - protocol: TCP
-      port: 8000
-      targetPort: 8000
----
-# 2. Sampler Headless Service
-apiVersion: v1
-kind: Service
-metadata:
-  name: sampler-service
+  name: trainer-a-service
 spec:
   clusterIP: None
   selector:
-    app: sampler
-  ports:
-    - protocol: TCP
-      port: 8001
-      targetPort: 8001
+    app: trainers
 ---
-# 3. Trainer Job on TPU v6e
+apiVersion: v1
+kind: Service
+metadata:
+  name: trainer-b-service
+spec:
+  clusterIP: None
+  selector:
+    app: trainers
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sampler-a-service
+spec:
+  clusterIP: None
+  selector:
+    app: samplers
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sampler-b-service
+spec:
+  clusterIP: None
+  selector:
+    app: samplers
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator-service
+spec:
+  clusterIP: None
+  selector:
+    app: orchestrator
+  ports:
+  - protocol: TCP
+    port: 9000
+    targetPort: 9000
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: trainer-job
+  name: trainers-job
 spec:
   template:
     metadata:
       labels:
-        app: trainer
+        app: trainers
     spec:
       restartPolicy: Never
       nodeSelector:
         cloud.google.com/gke-tpu-accelerator: tpu-v6e-slice
-        cloud.google.com/gke-tpu-topology: 2x4  # standard for single-host 8-chip v6e
+        cloud.google.com/gke-tpu-topology: 2x4
       initContainers:
       - name: download-model
         image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
         imagePullPolicy: Always
-        command: ["/bin/bash", "-c"]
+        command:
+        - /bin/bash
+        - -c
         args:
-          - "pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint"
+        - pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint
+        env:
+        - name: HF_TOKEN
+          value: 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
         volumeMounts:
         - name: checkpoint-vol
           mountPath: /checkpoint
       containers:
-      - name: trainer
+      - name: trainer-a
         image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
         imagePullPolicy: Always
-        command: ["python3", "-m", "torch.distributed.run"]
-        args: 
-          - "--nproc_per_node=8"
-          - "/app/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_trainer.py"
-          - "--module=torchtitan.experiments.tpu.rl"
-          - "--config=grpo_qwen3_0_6b_glp"
-          - "--checkpoint.initial_load_path"
-          - "/checkpoint"
-          - "--checkpoint.initial_load_in_hf"
-          - "--checkpoint.enable"
+        command:
+        - python3
+        - -m
+        - torch.distributed.run
+        args:
+        - --nproc_per_node=8
+        - /app/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_trainer.py
+        - --module=torchtitan.experiments.tpu.rl
+        - --config=grpo_qwen3_0_6b_glp
+        - --checkpoint.initial_load_path=/checkpoint
+        - --checkpoint.initial_load_in_hf
+        - --checkpoint.enable
+        env:
+        - name: XLA_PYTHON_CLIENT_MEM_FRACTION
+          value: "0.45"
+        - name: PJRT_DEVICE_MEMORY_FRACTION
+          value: "0.45"
+        - name: DEFER_INIT
+          value: 'true'
+        - name: SERVER_PORT
+          value: '8000'
+        - name: BROADCAST_PORT
+          value: '18000'
         volumeMounts:
         - mountPath: /dev/shm
           name: dshm
@@ -75,23 +113,92 @@ spec:
         resources:
           limits:
             google.com/tpu: 8
+      - name: trainer-b
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        imagePullPolicy: Always
+        command:
+        - python3
+        - -m
+        - torch.distributed.run
+        args:
+        - --nproc_per_node=8
+        - --master_port=29501
+        - /app/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_trainer.py
+        - --module=torchtitan.experiments.tpu.rl
+        - --config=grpo_qwen3_0_6b_glp
+        - --checkpoint.initial_load_path=/checkpoint
+        - --checkpoint.initial_load_in_hf
+        - --checkpoint.enable
+        env:
+        - name: XLA_PYTHON_CLIENT_MEM_FRACTION
+          value: "0.45"
+        - name: PJRT_DEVICE_MEMORY_FRACTION
+          value: "0.45"
+        - name: DEFER_INIT
+          value: 'true'
+        - name: SERVER_PORT
+          value: '8002'
+        - name: BROADCAST_PORT
+          value: '18002'
+        - name: TPU_WORKER_ID
+          value: '0'
+        - name: TPU_ACCELERATOR_TYPE
+          value: v6e-8
+        - name: TPU_TOPOLOGY
+          value: 2x4
+        - name: TPU_CHIPS_PER_HOST_BOUNDS
+          value: 2,4,1
+        - name: TPU_HOST_BOUNDS
+          value: 1,1,1
+        - name: TPU_SKIP_MDS_QUERY
+          value: 'true'
+        - name: TPU_TOPOLOGY_WRAP
+          value: false,false,false
+        - name: TPU_TOPOLOGY_ALT
+          value: 'false'
+        - name: TPU_WORKER_HOSTNAMES
+          value: localhost
+        - name: TPU_RUNTIME_METRICS_PORTS
+          value: 8451,8452,8453,8454,8455,8456,8457,8458
+        - name: VBAR_CONTROL_SERVICE_URL
+          value: unix:///var/run/tpu-plugin/vbar.sock
+        - name: SLICEBUILDER_PORT
+          value: '10010'
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - mountPath: /dev/shm
+          name: dshm
+        - mountPath: /checkpoint
+          name: checkpoint-vol
+        - mountPath: /dev/vfio
+          name: host-dev-vfio
+        - name: tpu-plugin-vol
+          mountPath: /var/run/tpu-plugin
+        ports:
+        - containerPort: 8002
       volumes:
       - name: dshm
         emptyDir:
           medium: Memory
       - name: checkpoint-vol
         emptyDir: {}
+      - name: host-dev-vfio
+        hostPath:
+          path: /dev/vfio
+      - name: tpu-plugin-vol
+        hostPath:
+          path: /var/run/tpu-plugin
 ---
-# 4. Sampler Job on TPU v6e
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sampler-job
+  name: samplers-job
 spec:
   template:
     metadata:
       labels:
-        app: sampler
+        app: samplers
     spec:
       restartPolicy: Never
       nodeSelector:
@@ -101,26 +208,44 @@ spec:
       - name: download-model
         image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
         imagePullPolicy: Always
-        command: ["/bin/bash", "-c"]
+        command:
+        - /bin/bash
+        - -c
         args:
-          - "pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint"
+        - pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint
+        env:
+        - name: HF_TOKEN
+          value: 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
         volumeMounts:
         - name: checkpoint-vol
           mountPath: /checkpoint
       containers:
-      - name: sampler
+      - name: sampler-a
         image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
         imagePullPolicy: Always
-        command: ["python3", "-m", "torch.distributed.run"]
-        args: 
-          - "--nproc_per_node=8"
-          - "/app/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_sampler.py"
-          - "--module=torchtitan.experiments.tpu.rl"
-          - "--config=grpo_qwen3_0_6b_glp"
-          - "--checkpoint.initial_load_path"
-          - "/checkpoint"
-          - "--checkpoint.initial_load_in_hf"
-          - "--checkpoint.enable"
+        command:
+        - python3
+        - -m
+        - torch.distributed.run
+        args:
+        - --nproc_per_node=8
+        - /app/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_sampler.py
+        - --module=torchtitan.experiments.tpu.rl
+        - --config=grpo_qwen3_0_6b_glp
+        - --checkpoint.initial_load_path=/checkpoint
+        - --checkpoint.initial_load_in_hf
+        - --checkpoint.enable
+        env:
+        - name: XLA_PYTHON_CLIENT_MEM_FRACTION
+          value: "0.45"
+        - name: PJRT_DEVICE_MEMORY_FRACTION
+          value: "0.45"
+        - name: DEFER_INIT
+          value: 'true'
+        - name: SERVER_PORT
+          value: '8001'
+        - name: BROADCAST_PORT
+          value: '18001'
         volumeMounts:
         - mountPath: /dev/shm
           name: dshm
@@ -131,33 +256,106 @@ spec:
         resources:
           limits:
             google.com/tpu: 8
+      - name: sampler-b
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        imagePullPolicy: Always
+        command:
+        - python3
+        - -m
+        - torch.distributed.run
+        args:
+        - --nproc_per_node=8
+        - --master_port=29501
+        - /app/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_sampler.py
+        - --module=torchtitan.experiments.tpu.rl
+        - --config=grpo_qwen3_0_6b_glp
+        - --checkpoint.initial_load_path=/checkpoint
+        - --checkpoint.initial_load_in_hf
+        - --checkpoint.enable
+        env:
+        - name: XLA_PYTHON_CLIENT_MEM_FRACTION
+          value: "0.45"
+        - name: PJRT_DEVICE_MEMORY_FRACTION
+          value: "0.45"
+        - name: DEFER_INIT
+          value: 'true'
+        - name: SERVER_PORT
+          value: '8003'
+        - name: BROADCAST_PORT
+          value: '18003'
+        - name: TPU_WORKER_ID
+          value: '0'
+        - name: TPU_ACCELERATOR_TYPE
+          value: v6e-8
+        - name: TPU_TOPOLOGY
+          value: 2x4
+        - name: TPU_CHIPS_PER_HOST_BOUNDS
+          value: 2,4,1
+        - name: TPU_HOST_BOUNDS
+          value: 1,1,1
+        - name: TPU_SKIP_MDS_QUERY
+          value: 'true'
+        - name: TPU_TOPOLOGY_WRAP
+          value: false,false,false
+        - name: TPU_TOPOLOGY_ALT
+          value: 'false'
+        - name: TPU_WORKER_HOSTNAMES
+          value: localhost
+        - name: TPU_RUNTIME_METRICS_PORTS
+          value: 8441,8442,8443,8444,8445,8446,8447,8448
+        - name: VBAR_CONTROL_SERVICE_URL
+          value: unix:///var/run/tpu-plugin/vbar.sock
+        - name: SLICEBUILDER_PORT
+          value: '10010'
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - mountPath: /dev/shm
+          name: dshm
+        - mountPath: /checkpoint
+          name: checkpoint-vol
+        - mountPath: /dev/vfio
+          name: host-dev-vfio
+        - name: tpu-plugin-vol
+          mountPath: /var/run/tpu-plugin
+        ports:
+        - containerPort: 8003
       volumes:
       - name: dshm
         emptyDir:
           medium: Memory
       - name: checkpoint-vol
         emptyDir: {}
+      - name: host-dev-vfio
+        hostPath:
+          path: /dev/vfio
+      - name: tpu-plugin-vol
+        hostPath:
+          path: /var/run/tpu-plugin
 ---
-# 5. Orchestrator (Driver) Job on standard CPU
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: driver-job
+  name: driver-a-job
 spec:
   template:
     metadata:
       labels:
-        app: driver
+        app: driver-a
     spec:
       restartPolicy: Never
-      # Runs on a standard CPU node (does not request TPU)
       initContainers:
       - name: download-model
         image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
         imagePullPolicy: Always
-        command: ["/bin/bash", "-c"]
+        command:
+        - /bin/bash
+        - -c
         args:
-          - "pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint"
+        - pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint
+        env:
+        - name: HF_TOKEN
+          value: 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
         volumeMounts:
         - name: checkpoint-vol
           mountPath: /checkpoint
@@ -165,48 +363,161 @@ spec:
       - name: driver
         image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
         imagePullPolicy: Always
-        command: ["/bin/bash", "-c"]
-        args: 
-          - |
-            python3 -c '
-            import socket, time, os
-            for host, port in [(os.environ.get("TRAINER_IP", "trainer-service"), 8000), (os.environ.get("SAMPLER_IP", "sampler-service"), 8001)]:
-                while True:
-                    try:
-                        socket.create_connection((host, port), timeout=2)
-                        print(f"{host}:{port} is ready!")
-                        break
-                    except Exception:
-                        print(f"Waiting for {host}:{port}...")
-                        time.sleep(5)
-            '
-            python3 -u /app/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/rl_driver.py
+        command:
+        - /bin/bash
+        - -c
+        args:
+        - "python3 -c '\nimport socket, time, os\nfor host, port in [(os.environ.get(\"\
+          TRAINER_IP\"), int(os.environ.get(\"TRAINER_PORT\"))), (os.environ.get(\"\
+          SAMPLER_IP\"), int(os.environ.get(\"SAMPLER_PORT\"))), (os.environ.get(\"\
+          ORCHESTRATOR_IP\"), 9000)]:\n    while True:\n        try:\n           \
+          \ socket.create_connection((host, port), timeout=2)\n            print(f\"\
+          {host}:{port} is ready!\")\n            break\n        except Exception:\n\
+          \            print(f\"Waiting for {host}:{port}...\")\n            time.sleep(5)\n\
+          '\npython3 -u /app/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/rl_driver.py\n"
         volumeMounts:
         - name: checkpoint-vol
           mountPath: /checkpoint
         env:
         - name: TOKENIZER_PATH
-          value: "/checkpoint"
+          value: /checkpoint
         - name: PYTHONUNBUFFERED
-          value: "1"
-        # DNS Service Resolution instead of hardcoded IPs
+          value: '1'
         - name: TRAINER_IP
-          value: "trainer-service"
+          value: trainer-a-service
+        - name: TRAINER_PORT
+          value: '8000'
         - name: SAMPLER_IP
-          value: "sampler-service"
-        # Control scaling configuration directly via K8s Environment Variables
+          value: sampler-a-service
+        - name: SAMPLER_PORT
+          value: '8001'
+        - name: ORCHESTRATOR_IP
+          value: orchestrator-service
+        - name: JOB_ID
+          value: job-a
         - name: PROMPTS_PER_STEP
-          value: "4"
+          value: '4'
         - name: GROUP_SIZE
-          value: "4"
+          value: '4'
         - name: TRAIN_EPOCHS
-          value: "32"
+          value: '32'
         - name: PROMPT_LEN
-          value: "128"
+          value: '128'
         - name: ROLLOUT_BATCH_SIZE
-          value: "8"
+          value: '8'
         - name: TRAIN_BATCH_SIZE
-          value: "8"
+          value: '8'
       volumes:
       - name: checkpoint-vol
         emptyDir: {}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: driver-b-job
+spec:
+  template:
+    metadata:
+      labels:
+        app: driver-b
+    spec:
+      restartPolicy: Never
+      initContainers:
+      - name: download-model
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        imagePullPolicy: Always
+        command:
+        - /bin/bash
+        - -c
+        args:
+        - pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint
+        env:
+        - name: HF_TOKEN
+          value: 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
+        volumeMounts:
+        - name: checkpoint-vol
+          mountPath: /checkpoint
+      containers:
+      - name: driver
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        imagePullPolicy: Always
+        command:
+        - /bin/bash
+        - -c
+        args:
+        - "python3 -c '\nimport socket, time, os\nfor host, port in [(os.environ.get(\"\
+          TRAINER_IP\"), int(os.environ.get(\"TRAINER_PORT\"))), (os.environ.get(\"\
+          SAMPLER_IP\"), int(os.environ.get(\"SAMPLER_PORT\"))), (os.environ.get(\"\
+          ORCHESTRATOR_IP\"), 9000)]:\n    while True:\n        try:\n           \
+          \ socket.create_connection((host, port), timeout=2)\n            print(f\"\
+          {host}:{port} is ready!\")\n            break\n        except Exception:\n\
+          \            print(f\"Waiting for {host}:{port}...\")\n            time.sleep(5)\n\
+          '\npython3 -u /app/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/rl_driver.py\n"
+        volumeMounts:
+        - name: checkpoint-vol
+          mountPath: /checkpoint
+        env:
+        - name: TOKENIZER_PATH
+          value: /checkpoint
+        - name: PYTHONUNBUFFERED
+          value: '1'
+        - name: TRAINER_IP
+          value: trainer-b-service
+        - name: TRAINER_PORT
+          value: '8002'
+        - name: SAMPLER_IP
+          value: sampler-b-service
+        - name: SAMPLER_PORT
+          value: '8003'
+        - name: ORCHESTRATOR_IP
+          value: orchestrator-service
+        - name: JOB_ID
+          value: job-b
+        - name: PROMPTS_PER_STEP
+          value: '4'
+        - name: GROUP_SIZE
+          value: '4'
+        - name: TRAIN_EPOCHS
+          value: '32'
+        - name: PROMPT_LEN
+          value: '128'
+        - name: ROLLOUT_BATCH_SIZE
+          value: '8'
+        - name: TRAIN_BATCH_SIZE
+          value: '8'
+      volumes:
+      - name: checkpoint-vol
+        emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestrator
+  template:
+    metadata:
+      labels:
+        app: orchestrator
+    spec:
+      containers:
+      - name: orchestrator
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        imagePullPolicy: Always
+        command:
+        - /bin/bash
+        - -c
+        args:
+        - 'pip install fastapi uvicorn pydantic grpcio
+
+          python3 -u /app/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/orchestrator.py
+
+          '
+        env:
+        - name: MODE
+          value: snapshot
+        ports:
+        - containerPort: 9000
