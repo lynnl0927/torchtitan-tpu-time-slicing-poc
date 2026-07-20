@@ -63,18 +63,17 @@ The Dockerfile installs `torch_tpu` from an authenticated artifact registry, so 
 
 ## 3. Running a One-Job Baseline (Without C/R)
 
-If you wish to test the architecture as a standard, single-job disaggregated pipeline without TPU time-slicing (no checkpoint/restore), you can do so by deploying only one job and disabling snapshot mode:
+If you wish to test the architecture as a standard, single-job disaggregated pipeline without TPU time-slicing (no checkpoint/restore), you can use the provided baseline manifest. The baseline drops the second job and ensures the primary job correctly claims native TPU resources without sharing.
 
-1. **Disable Snapshot Mode**: In the `rl-disagg.yaml` file, locate the `orchestrator-deployment` and change the `MODE` environment variable from `snapshot` to `baseline`.
-2. **Remove Job B**: Delete all Kubernetes resources associated with Job B from the manifest (i.e., `trainer-b`, `sampler-b`, `driver-b`, and their corresponding `Service` entries).
-3. **Revert to Standard TPU Scheduling (Optional)**: Since Job A is no longer sharing the TPU, you don't need privileged access or custom `libtpu` bypassing:
-   - Remove `securityContext: privileged: true` from `sampler-a`.
-   - Remove the `hostPath` volumes and `volumeMounts` for `/dev/vfio` and `/var/run/tpu-plugin`.
-   - Add back `google.com/tpu: 8` to the `resources: limits:` block for `sampler-a`.
-   - Remove the `TPU_LIBRARY_PATH` environment variable so the standard `libtpu.so` is used.
-4. **Deploy**:
+1. **Update Image URI**: 
+   Update the `image:` fields to match your newly pushed `$IMAGE_NAME`:
    ```bash
-   kubectl apply -f torchtitan/experiments/tpu/rl/rl-disagg/deploy/rl-disagg.yaml
+   sed -i "s|image: .*|image: $IMAGE_NAME|g" torchtitan/experiments/tpu/rl/rl-disagg/deploy/rl-disagg-baseline.yaml
+   ```
+
+2. **Deploy**:
+   ```bash
+   kubectl apply -f torchtitan/experiments/tpu/rl/rl-disagg/deploy/rl-disagg-baseline.yaml
    ```
 
 ## 4. Deploying Two-Job Time Slicing (With C/R)
