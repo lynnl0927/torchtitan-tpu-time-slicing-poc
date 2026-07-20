@@ -5,7 +5,7 @@ metadata:
 spec:
   clusterIP: None
   selector:
-    app: trainers
+    app: trainer-a
 ---
 apiVersion: v1
 kind: Service
@@ -14,7 +14,7 @@ metadata:
 spec:
   clusterIP: None
   selector:
-    app: trainers
+    app: trainer-b
 ---
 apiVersion: v1
 kind: Service
@@ -23,7 +23,7 @@ metadata:
 spec:
   clusterIP: None
   selector:
-    app: samplers
+    app: sampler-a
 ---
 apiVersion: v1
 kind: Service
@@ -32,7 +32,7 @@ metadata:
 spec:
   clusterIP: None
   selector:
-    app: samplers
+    app: sampler-b
 ---
 apiVersion: v1
 kind: Service
@@ -50,32 +50,13 @@ spec:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: trainers-job
+  name: trainer-a
 spec:
   template:
     metadata:
       labels:
-        app: trainers
+        app: trainer-a
     spec:
-      restartPolicy: Never
-      nodeSelector:
-        cloud.google.com/gke-tpu-accelerator: tpu-v6e-slice
-        cloud.google.com/gke-tpu-topology: 2x4
-      initContainers:
-      - name: download-model
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
-        imagePullPolicy: Always
-        command:
-        - /bin/bash
-        - -c
-        args:
-        - pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint
-        env:
-        - name: HF_TOKEN
-          value: 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
-        volumeMounts:
-        - name: checkpoint-vol
-          mountPath: /checkpoint
       containers:
       - name: trainer-a
         image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
@@ -93,12 +74,14 @@ spec:
         - --checkpoint.initial_load_in_hf
         - --checkpoint.enable
         env:
-        - name: XLA_PYTHON_CLIENT_MEM_FRACTION
-          value: "0.45"
-        - name: PJRT_DEVICE_MEMORY_FRACTION
-          value: "0.45"
+        - name: TPU_WORKER_HOSTNAMES
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
         - name: DEFER_INIT
           value: 'true'
+        - name: ENABLE_RUNTIME_UPTIME_TELEMETRY
+          value: '0'
         - name: SERVER_PORT
           value: '8000'
         - name: BROADCAST_PORT
@@ -113,6 +96,49 @@ spec:
         resources:
           limits:
             google.com/tpu: 8
+      initContainers:
+      - args:
+        - pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint
+        command:
+        - /bin/bash
+        - -c
+        env:
+        - name: HF_TOKEN
+          value: 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
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        imagePullPolicy: Always
+        name: download-model
+        volumeMounts:
+        - mountPath: /checkpoint
+          name: checkpoint-vol
+      nodeSelector:
+        cloud.google.com/gke-tpu-accelerator: tpu-v5-lite-podslice
+        cloud.google.com/gke-tpu-topology: 2x4
+      restartPolicy: Never
+      volumes:
+      - emptyDir:
+          medium: Memory
+        name: dshm
+      - emptyDir: {}
+        name: checkpoint-vol
+      - hostPath:
+          path: /dev/vfio
+        name: host-dev-vfio
+      - hostPath:
+          path: /var/run/tpu-plugin
+        name: tpu-plugin-vol
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trainer-b
+spec:
+  template:
+    metadata:
+      labels:
+        app: trainer-b
+    spec:
+      containers:
       - name: trainer-b
         image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
         imagePullPolicy: Always
@@ -130,12 +156,10 @@ spec:
         - --checkpoint.initial_load_in_hf
         - --checkpoint.enable
         env:
-        - name: XLA_PYTHON_CLIENT_MEM_FRACTION
-          value: "0.45"
-        - name: PJRT_DEVICE_MEMORY_FRACTION
-          value: "0.45"
         - name: DEFER_INIT
           value: 'true'
+        - name: ENABLE_RUNTIME_UPTIME_TELEMETRY
+          value: '0'
         - name: SERVER_PORT
           value: '8002'
         - name: BROADCAST_PORT
@@ -143,7 +167,7 @@ spec:
         - name: TPU_WORKER_ID
           value: '0'
         - name: TPU_ACCELERATOR_TYPE
-          value: v6e-8
+          value: v5litepod-8
         - name: TPU_TOPOLOGY
           value: 2x4
         - name: TPU_CHIPS_PER_HOST_BOUNDS
@@ -157,13 +181,13 @@ spec:
         - name: TPU_TOPOLOGY_ALT
           value: 'false'
         - name: TPU_WORKER_HOSTNAMES
-          value: localhost
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
         - name: TPU_RUNTIME_METRICS_PORTS
           value: 8451,8452,8453,8454,8455,8456,8457,8458
         - name: VBAR_CONTROL_SERVICE_URL
           value: unix:///var/run/tpu-plugin/vbar.sock
-        - name: SLICEBUILDER_PORT
-          value: '10010'
         securityContext:
           privileged: true
         volumeMounts:
@@ -177,48 +201,58 @@ spec:
           mountPath: /var/run/tpu-plugin
         ports:
         - containerPort: 8002
+      initContainers:
+      - args:
+        - pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint
+        command:
+        - /bin/bash
+        - -c
+        env:
+        - name: HF_TOKEN
+          value: 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
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        imagePullPolicy: Always
+        name: download-model
+        volumeMounts:
+        - mountPath: /checkpoint
+          name: checkpoint-vol
+      nodeSelector:
+        cloud.google.com/gke-tpu-accelerator: tpu-v5-lite-podslice
+        cloud.google.com/gke-tpu-topology: 2x4
+      restartPolicy: Never
       volumes:
-      - name: dshm
-        emptyDir:
+      - emptyDir:
           medium: Memory
-      - name: checkpoint-vol
-        emptyDir: {}
-      - name: host-dev-vfio
-        hostPath:
+        name: dshm
+      - emptyDir: {}
+        name: checkpoint-vol
+      - hostPath:
           path: /dev/vfio
-      - name: tpu-plugin-vol
-        hostPath:
+        name: host-dev-vfio
+      - hostPath:
           path: /var/run/tpu-plugin
+        name: tpu-plugin-vol
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - trainer-a
+            topologyKey: kubernetes.io/hostname
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: samplers-job
+  name: sampler-a
 spec:
   template:
     metadata:
       labels:
-        app: samplers
+        app: sampler-a
     spec:
-      restartPolicy: Never
-      nodeSelector:
-        cloud.google.com/gke-tpu-accelerator: tpu-v6e-slice
-        cloud.google.com/gke-tpu-topology: 2x4
-      initContainers:
-      - name: download-model
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
-        imagePullPolicy: Always
-        command:
-        - /bin/bash
-        - -c
-        args:
-        - pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint
-        env:
-        - name: HF_TOKEN
-          value: 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
-        volumeMounts:
-        - name: checkpoint-vol
-          mountPath: /checkpoint
       containers:
       - name: sampler-a
         image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
@@ -236,12 +270,14 @@ spec:
         - --checkpoint.initial_load_in_hf
         - --checkpoint.enable
         env:
-        - name: XLA_PYTHON_CLIENT_MEM_FRACTION
-          value: "0.45"
-        - name: PJRT_DEVICE_MEMORY_FRACTION
-          value: "0.45"
+        - name: TPU_WORKER_HOSTNAMES
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
         - name: DEFER_INIT
           value: 'true'
+        - name: ENABLE_RUNTIME_UPTIME_TELEMETRY
+          value: '0'
         - name: SERVER_PORT
           value: '8001'
         - name: BROADCAST_PORT
@@ -256,6 +292,49 @@ spec:
         resources:
           limits:
             google.com/tpu: 8
+      initContainers:
+      - args:
+        - pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint
+        command:
+        - /bin/bash
+        - -c
+        env:
+        - name: HF_TOKEN
+          value: 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
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        imagePullPolicy: Always
+        name: download-model
+        volumeMounts:
+        - mountPath: /checkpoint
+          name: checkpoint-vol
+      nodeSelector:
+        cloud.google.com/gke-tpu-accelerator: tpu-v5-lite-podslice
+        cloud.google.com/gke-tpu-topology: 2x4
+      restartPolicy: Never
+      volumes:
+      - emptyDir:
+          medium: Memory
+        name: dshm
+      - emptyDir: {}
+        name: checkpoint-vol
+      - hostPath:
+          path: /dev/vfio
+        name: host-dev-vfio
+      - hostPath:
+          path: /var/run/tpu-plugin
+        name: tpu-plugin-vol
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sampler-b
+spec:
+  template:
+    metadata:
+      labels:
+        app: sampler-b
+    spec:
+      containers:
       - name: sampler-b
         image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
         imagePullPolicy: Always
@@ -273,12 +352,10 @@ spec:
         - --checkpoint.initial_load_in_hf
         - --checkpoint.enable
         env:
-        - name: XLA_PYTHON_CLIENT_MEM_FRACTION
-          value: "0.45"
-        - name: PJRT_DEVICE_MEMORY_FRACTION
-          value: "0.45"
         - name: DEFER_INIT
           value: 'true'
+        - name: ENABLE_RUNTIME_UPTIME_TELEMETRY
+          value: '0'
         - name: SERVER_PORT
           value: '8003'
         - name: BROADCAST_PORT
@@ -286,7 +363,7 @@ spec:
         - name: TPU_WORKER_ID
           value: '0'
         - name: TPU_ACCELERATOR_TYPE
-          value: v6e-8
+          value: v5litepod-8
         - name: TPU_TOPOLOGY
           value: 2x4
         - name: TPU_CHIPS_PER_HOST_BOUNDS
@@ -300,13 +377,13 @@ spec:
         - name: TPU_TOPOLOGY_ALT
           value: 'false'
         - name: TPU_WORKER_HOSTNAMES
-          value: localhost
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
         - name: TPU_RUNTIME_METRICS_PORTS
           value: 8441,8442,8443,8444,8445,8446,8447,8448
         - name: VBAR_CONTROL_SERVICE_URL
           value: unix:///var/run/tpu-plugin/vbar.sock
-        - name: SLICEBUILDER_PORT
-          value: '10010'
         securityContext:
           privileged: true
         volumeMounts:
@@ -320,18 +397,47 @@ spec:
           mountPath: /var/run/tpu-plugin
         ports:
         - containerPort: 8003
+      initContainers:
+      - args:
+        - pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint
+        command:
+        - /bin/bash
+        - -c
+        env:
+        - name: HF_TOKEN
+          value: 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
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        imagePullPolicy: Always
+        name: download-model
+        volumeMounts:
+        - mountPath: /checkpoint
+          name: checkpoint-vol
+      nodeSelector:
+        cloud.google.com/gke-tpu-accelerator: tpu-v5-lite-podslice
+        cloud.google.com/gke-tpu-topology: 2x4
+      restartPolicy: Never
       volumes:
-      - name: dshm
-        emptyDir:
+      - emptyDir:
           medium: Memory
-      - name: checkpoint-vol
-        emptyDir: {}
-      - name: host-dev-vfio
-        hostPath:
+        name: dshm
+      - emptyDir: {}
+        name: checkpoint-vol
+      - hostPath:
           path: /dev/vfio
-      - name: tpu-plugin-vol
-        hostPath:
+        name: host-dev-vfio
+      - hostPath:
           path: /var/run/tpu-plugin
+        name: tpu-plugin-vol
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - sampler-a
+            topologyKey: kubernetes.io/hostname
 ---
 apiVersion: batch/v1
 kind: Job
