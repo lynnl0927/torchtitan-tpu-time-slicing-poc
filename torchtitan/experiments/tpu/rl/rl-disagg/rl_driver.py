@@ -138,14 +138,14 @@ def run_rl_loop():
         "pids": [],
         "url": f"http://{SAMPLER_IP}:{SAMPLER_PORT}",
         "checkpointed": False
-    })
+    }).raise_for_status()
     requests.post(f"http://{ORCHESTRATOR_IP}:9000/register", json={
         "workload_id": f"{JOB_ID}_trainer",
         "pool": "trainer",
         "pids": [],
         "url": f"http://{TRAINER_IP}:{TRAINER_PORT}",
         "checkpointed": False
-    })
+    }).raise_for_status()
     
     recent_rewards = []
     holding_sampler = False
@@ -168,8 +168,8 @@ def run_rl_loop():
         t0 = time.time()
         if not holding_sampler:
             print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Acquiring Sampler lock...", flush=True)
-            requests.post(f"http://{ORCHESTRATOR_IP}:9000/acquire", json={"workload_id": f"{JOB_ID}_sampler"})
-            requests.post(f"http://{SAMPLER_IP}:{SAMPLER_PORT}/start")
+            requests.post(f"http://{ORCHESTRATOR_IP}:9000/acquire", json={"workload_id": f"{JOB_ID}_sampler"}).raise_for_status()
+            requests.post(f"http://{SAMPLER_IP}:{SAMPLER_PORT}/start").raise_for_status()
             print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Sampler restored. Starting generation...", flush=True)
         else:
             print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Sampler lock already held. Starting generation...", flush=True)
@@ -183,7 +183,7 @@ def run_rl_loop():
                 break
             completed_ids.extend(res.json()["completed_ids"])
         print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Yielding Sampler lock...", flush=True)
-        requests.post(f"http://{ORCHESTRATOR_IP}:9000/yield", json={"workload_id": f"{JOB_ID}_sampler"})
+        requests.post(f"http://{ORCHESTRATOR_IP}:9000/yield", json={"workload_id": f"{JOB_ID}_sampler"}).raise_for_status()
         print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Sampler checkpointed and yielded.", flush=True)
         holding_sampler = False
         
@@ -225,8 +225,8 @@ def run_rl_loop():
         # 3. Policy Gradient Backpropagation on Trainer VM (chunked into micro-batches across multiple PPO/GRPO epochs!)
         t0 = time.time()
         print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Acquiring Trainer lock...", flush=True)
-        requests.post(f"http://{ORCHESTRATOR_IP}:9000/acquire", json={"workload_id": f"{JOB_ID}_trainer"})
-        requests.post(f"http://{TRAINER_IP}:{TRAINER_PORT}/start")
+        requests.post(f"http://{ORCHESTRATOR_IP}:9000/acquire", json={"workload_id": f"{JOB_ID}_trainer"}).raise_for_status()
+        requests.post(f"http://{TRAINER_IP}:{TRAINER_PORT}/start").raise_for_status()
         print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Trainer restored. Starting training...", flush=True)
         total_loss = 0.0
         total_kl = 0.0
@@ -260,15 +260,15 @@ def run_rl_loop():
         # 4. Synchronous FSDP Checkpoint Export & Weight Sync
         t0_sync = time.time()
         print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Exporting weights from Trainer...", flush=True)
-        requests.post(f"http://{TRAINER_IP}:{TRAINER_PORT}/export_weights")
+        requests.post(f"http://{TRAINER_IP}:{TRAINER_PORT}/export_weights").raise_for_status()
         print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Yielding Trainer lock...", flush=True)
-        requests.post(f"http://{ORCHESTRATOR_IP}:9000/yield", json={"workload_id": f"{JOB_ID}_trainer"})
+        requests.post(f"http://{ORCHESTRATOR_IP}:9000/yield", json={"workload_id": f"{JOB_ID}_trainer"}).raise_for_status()
         print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Trainer checkpointed and yielded.", flush=True)
         
         print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Acquiring Sampler lock for weight update...", flush=True)
-        requests.post(f"http://{ORCHESTRATOR_IP}:9000/acquire", json={"workload_id": f"{JOB_ID}_sampler"})
+        requests.post(f"http://{ORCHESTRATOR_IP}:9000/acquire", json={"workload_id": f"{JOB_ID}_sampler"}).raise_for_status()
         print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Updating Sampler weights...", flush=True)
-        requests.post(f"http://{SAMPLER_IP}:{SAMPLER_PORT}/update_weights", json={"trainer_ip": TRAINER_IP, "trainer_port": TRAINER_PORT})
+        requests.post(f"http://{SAMPLER_IP}:{SAMPLER_PORT}/update_weights", json={"trainer_ip": TRAINER_IP, "trainer_port": TRAINER_PORT}).raise_for_status()
         print(f"[{time.strftime('%H:%M:%S')}] [{JOB_ID}] Sampler holding lock for next iteration.", flush=True)
         holding_sampler = True
         print(f"Synced weights across FSDP meshes in {time.time() - t0_sync:.2f}s")

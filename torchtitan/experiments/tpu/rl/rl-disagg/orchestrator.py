@@ -145,7 +145,10 @@ def call_workload_cr(workload_id: str, method: str) -> float:
 
     body = json.dumps({}).encode()
     req = urllib.request.Request(endpoint, data=body, headers={"Content-Type": "application/json"})
-    resp = urllib.request.urlopen(req, timeout=300)
+    # Restore fans out to 8 sockets, each retried up to 4x @ 45s fail-fast.
+    # Keep well above that worst case (4x45x-ish) so a legitimately slow
+    # restore completes instead of tripping the client before the server.
+    resp = urllib.request.urlopen(req, timeout=900)
     result = json.loads(resp.read().decode())
     elapsed = (time.perf_counter() - t0) * 1000
     log.info(f"[{workload_id}] {method} elapsed: {elapsed:.0f}ms result={result}")
