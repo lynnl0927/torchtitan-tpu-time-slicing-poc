@@ -1,275 +1,236 @@
 # Disaggregated TPU GRPO Reinforcement Learning (`rl-disagg`)
 
-This directory contains a fully disaggregated, strictly synchronous, on-policy Group Relative Policy Optimization (GRPO) reinforcement learning pipeline for [TorchTitan](https://github.com/google-pytorch/torchtitan) on Google Cloud TPU v5e meshes.
-
-By decoupling autoregressive sampling (generation) and gradient backpropagation (training) across separate TPU virtual machines, this architecture eliminates memory contention between inference KV-caches and training optimizer states while maintaining 100% on-policy weight synchronization.
+This directory contains a fully disaggregated, strictly synchronous, on-policy Group Relative Policy Optimization (GRPO) reinforcement learning pipeline for [TorchTitan](https://github.com/google-pytorch/torchtitan) on Google Cloud TPU.
 
 ---
 
-## 1. Architecture & Overview
+## 1. Architecture Overview
 
-* **Reference Baseline**: Extends the monolithic TorchTitan TPU RL implementation at [`torchtitan/experiments/tpu/rl`](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl).
-* **Trainer Mesh (`VM 1`)**: Executes forward evaluation, policy gradient loss computation, and AdamW optimizer steps across an 8-chip FSDP mesh ([server_trainer.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_trainer.py)).
-* **Sampler Mesh (`VM 2`)**: Executes distributed autoregressive sampling across an independent 8-chip FSDP mesh ([server_sampler.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_sampler.py)).
-* **Orchestrator Client**: Coordinates synchronous execution, downloads and tokenizes the OpenAI GSM8K math dataset, computes rule-based XML reasoning rewards ([reward.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/reward.py)), and manages cross-VM FSDP weight updates via HTTP REST endpoints ([rl_driver.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/rl_driver.py)).
-* **GRPO Importance Sampling**: In [grpo_utils.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/grpo_utils.py), loss computation uses PPO clipped importance sampling. The trainer explicitly passes `old_log_probs` (synchronized across FSDP shards) to maintain the reference policy distribution across multiple inner PPO epochs. Without `old_log_probs`, the importance sampling ratio $\frac{\pi_\theta(a|s)}{\pi_{\theta_{\text{old}}}(a|s)}$ evaluates to $1.0$, causing policy gradients to vanish to zero.
-* **Sampler Logit Integrity**: In [grpo_sampler.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/grpo_sampler.py), autoregressive sampling operates directly on clean model logits. Adding artificial noise to logits during sampling produces gibberish rollouts, resulting in zero rewards and zero advantages across prompt groups.
+```mermaid
+graph TB
+    subgraph "RL Job A"
+        DA["rl_driver.py<br/>(Job A Orchestrator)"]
+        TA["server_trainer.py<br/>8-chip FSDP Trainer<br/>Port 8000"]
+        SA["server_sampler.py<br/>8-chip FSDP Sampler<br/>Port 8001"]
+    end
 
-> [!NOTE]
-> **Why Standalone TPU Spot VMs?**
-> During initial testing, GKE node pool creation failed due to on-demand quota limitations even when requesting Spot instances. To bypass this, two standalone TPU v5e spot VMs (`test-v5e-spot`) were provisioned directly via Google Compute Engine (GCE) / `gcloud`.
+    subgraph "RL Job B"
+        DB["rl_driver.py<br/>(Job B Orchestrator)"]
+        TB["server_trainer.py<br/>8-chip FSDP Trainer<br/>Port 8002"]
+        SB["server_sampler.py<br/>8-chip FSDP Sampler<br/>Port 8003"]
+    end
+
+    ORCH["orchestrator.py<br/>TPU Time-Slicing Orchestrator<br/>Port 9000"]
+
+
+    DA -->|"/generate"| SA
+    DA -->|"/train"| TA
+    DA -->|"/export_weights"| TA
+    DA -->|"/update_weights"| SA
+    DA -->|"/acquire, /yield"| ORCH
+
+    DB -->|"/generate"| SB
+    DB -->|"/train"| TB
+    DB -->|"/export_weights"| TB
+    DB -->|"/update_weights"| SB
+    DB -->|"/acquire, /yield"| ORCH
+```
+
+### Components
+
+| Component | File | Role |
+|-----------|------|------|
+| **Trainer Server** | [server_trainer.py](server_trainer.py) | 8-chip FSDP mesh that executes forward evaluation, GRPO policy gradient loss, and AdamW optimizer steps. Exposes HTTP endpoints for `/train`, `/export_weights`, `/checkpoint`, `/restore`. |
+| **Sampler Server** | [server_sampler.py](server_sampler.py) | 8-chip FSDP mesh that executes distributed autoregressive generation. Exposes HTTP endpoints for `/generate`, `/update_weights`, `/checkpoint`, `/restore`. |
+| **Orchestrator** | [orchestrator.py](orchestrator.py) | Centralized lock manager that coordinates TPU time-slicing. Manages `acquire`/`yield` flows and triggers hardware checkpoint/restore when workloads swap. |
+| **RL Driver** | [rl_driver.py](rl_driver.py) | Per-job orchestrator client. Downloads GSM8K prompts, tokenizes them, sends to sampler, computes rule-based rewards, sends to trainer, and triggers weight sync. |
+| **TPU HAL Snapshot** | [tpu_hal_snapshot.py](tpu_hal_snapshot.py) | Low-level checkpoint/restore agent. Calls `tpu.TpuHalService/Checkpoint` and `tpu.TpuHalService/Restore` via `grpcurl` on each `libtpu` Unix domain socket. |
+| **Reward Engine** | [reward.py](reward.py) | Rule-based GSM8K reward computation and GRPO advantage normalization. Pure Python, runs on the driver. |
 
 ---
 
-## 2. Connecting to TPU VMs
+## 2. How Training Works
 
-### Querying VM Hostnames
-To retrieve the internal FQDN / guest attributes of your provisioned TPU spot VM:
-```bash
-gcloud compute tpus tpu-vm get-guest-attributes \
-  --zone=us-east1-c \
-  --query-path deviceInfo/hostname \
-  test-v5e-spot
-```
-Example Output:
-```text
-NAMESPACE   KEY       WORKER_ID  VALUE
-deviceInfo  hostname  0          t1v-n-cca1e90f-w-0
-```
+The trainer runs on an independent 8-chip TPU FSDP mesh ([server_trainer.py](server_trainer.py)).
 
-### SSH Access
-You can connect to the VMs directly via internal SSH FQDNs or using `gcloud`:
+### SPMD Control Loop
 
-#### Option A: Direct SSH (from Cloudtop / Workstation)
-```bash
-ssh linglinll_google_com@nic0.t1v-n-cca1e90f-w-0.us-east1-c.c.linglinll-gke-dev.internal.gcpnode.com
-```
+The trainer uses a **CPU-idle SPMD control loop** instead of `torch.distributed.broadcast_object_list`:
 
-#### Option B: `gcloud` SSH with Proxy Command
-```bash
-gcloud compute tpus tpu-vm ssh test-v5e-spot \
-  --zone=us-east1-c \
-  -- -o Hostname=nic0.t1v-n-cca1e90f-w-0.us-east1-c.c.linglinll-gke-dev.internal.gcpnode.com \
-  -o ProxyCommand='corp-ssh-helper %h %p'
-```
+1. **Rank 0** runs a FastAPI HTTP server in a background thread and blocks on a `queue.Queue` for incoming commands.
+2. **Ranks 1–7** block on localhost TCP `socket.recv()` via `CPUCommandBroadcast`.
+3. When Rank 0 receives an HTTP request, it pushes the command to the queue, then broadcasts it to all ranks over the TCP socket. All ranks execute the SPMD operation in lockstep.
 
----
-
-## 3. Environment Setup & Dependency Installation
-
-Perform the following setup steps on **both** the Trainer VM and Sampler VM.
-
-### Step 1: Copy Codebase to VMs
-From your local workstation, securely copy your clean TorchTitan repository to both TPU VMs:
-```bash
-# 1. Copy to Trainer VM:
-scp -r ~/clean/torchtitan linglinll_google_com@nic0.t1v-n-0f7bbb5c-w-0.us-east1-c.c.linglinll-gke-dev.internal.gcpnode.com:~
-
-# 2. Copy to Sampler VM:
-scp -r ~/clean/torchtitan linglinll_google_com@nic0.t1v-n-cca1e90f-w-0.us-east1-c.c.linglinll-gke-dev.internal.gcpnode.com:~
-```
-
-### Step 2: System Packages & Python 3.12 Virtual Environment
-SSH into each VM and initialize a clean Python 3.12 virtual environment:
-```bash
-# Refresh package lists and install Python 3.12 venv support
-sudo apt update
-sudo apt install -y python3.12 python3.12-venv
-
-# Create and activate virtual environment
-python3.12 -m venv ~/titan_env
-source ~/titan_env/bin/activate
-
-# Upgrade pip and verify version
-pip install --upgrade pip
-python --version  # Must print Python 3.12.x
-```
-
-### Step 3: Install JAX, PyTorch, and Tokamax
 > [!IMPORTANT]
-> **Strict Installation Sequence**
-> The package installation order below is critical to prevent dependency conflicts with `tokamax` and `libtpu` (see [Tokamax Issue #240](https://github.com/openxla/tokamax/issues/240)). Do not reorder or combine these `pip install` commands.
+> This `CPUCommandBroadcast` pattern is critical for hardware oversubscription: while waiting for HTTP commands, Ranks 1–7 block in OS kernel space on `socket.recv()`, executing **zero TPU hardware instructions**. This drives idle TPU duty cycle to **0.00%**, enabling clean handoff to the other time-sliced job.
 
-```bash
-pip install fastapi uvicorn requests
+### Training Step (`/train`)
 
-# Install JAX and Tokamax sequence
-pip install "jax[tpu]==0.9.1" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
-pip install git+https://github.com/openxla/tokamax.git@8cba6a6a1e52e9efbb7ff8facb66f18f0bfcbe4c
+Each `/train` request carries `prompt_ids`, `completed_ids`, and `advantages`:
 
-# Install CPU PyTorch and LibTPU runtime
-pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
-pip install libtpu==0.0.40 -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+1. The model runs a **no-grad forward pass** on `completed_ids` to compute `token_log_probs` (the "old" policy log-probs).
+2. A frozen **reference model** (`ref_model`) also runs a forward pass to compute `ref_token_log_probs`.
+3. GRPO loss is computed using PPO-clipped importance sampling with the ratio $\frac{\pi_\theta(a|s)}{\pi_{\theta_{\text{old}}}(a|s)}$ and a KL penalty against the reference policy (see [grpo_utils.py](../grpo_utils.py)).
+4. `loss.backward()` + `optimizer.step()` updates the model weights.
+5. Multiple PPO/GRPO inner epochs are run per step (configurable via `TRAIN_EPOCHS`).
 
-# Re-verify HTTP server dependencies
-pip install fastapi uvicorn requests
-```
+### Weight Export (`/export_weights`)
 
-### Step 4: Download and Install `torch_tpu`
-Because `torch_tpu` requires authenticated access to Google Cloud Artifact Registry, download the wheel on your **local workstation** (authenticated with `@google.com`) and copy it to both VMs:
-
-#### On Local Workstation:
-```bash
-# Download torch_tpu wheel
-pip download --pre --no-deps \
-    --python-version 3.12 \
-    --only-binary=:all: \
-    --platform manylinux_2_31_x86_64 \
-    --index-url "https://oauth2accesstoken:$(gcloud auth application-default print-access-token)@us-python.pkg.dev/ml-oss-artifacts-transient/torch-tpu-virtual-registry/simple/" \
-    torch_tpu
-
-# SCP to Trainer VM and Sampler VM
-scp ~/torch_tpu-*-cp312-*.whl linglinll_google_com@nic0.t1v-n-0f7bbb5c-w-0.us-east1-c.c.linglinll-gke-dev.internal.gcpnode.com:~
-scp ~/torch_tpu-*-cp312-*.whl linglinll_google_com@nic0.t1v-n-cca1e90f-w-0.us-east1-c.c.linglinll-gke-dev.internal.gcpnode.com:~
-```
-
-#### On Both TPU VMs:
-```bash
-source ~/titan_env/bin/activate
-pip install --no-deps ~/torch_tpu-*-cp312-*.whl
-```
-
-### Step 5: Install TorchTitan & Verify Readiness
-```bash
-source ~/titan_env/bin/activate
-cd ~/torchtitan
-
-# Install project dependencies
-pip install -r requirements.txt
-pip install portpicker absl-py numpy gcsfs frozendict triton fairscale tamm
-
-# Restore typeguard to 2.13.3 for Tokamax compatibility
-pip install 'typeguard==2.13.3'
-
-# Verify end-to-end installation readiness
-python3 -c "import torch, torch_tpu, fastapi, uvicorn, requests; print('VM is 100 percent ready')"
-```
+After training, the trainer gathers all FSDP shards via `full_tensor()` and saves the full state dict to `/tmp/trainer_weights.pt`. The sampler downloads this file over HTTP and reloads it into its own FSDP mesh, guaranteeing **100% on-policy weight synchronization**.
 
 ---
 
-## 4. Running the Disaggregated RL Pipeline
+## 3. How Sampling Works
 
-To execute a 16-chip disaggregated GRPO training loop on **Qwen 3 (0.6B)** across your two VMs, open three separate terminal sessions:
+The sampler runs on a separate 8-chip TPU FSDP mesh ([server_sampler.py](server_sampler.py)).
 
-### Terminal 1 — On Trainer VM (`t1v-n-0f7bbb5c-w-0`)
-Start the 8-chip FSDP Trainer server on port `8000`:
-```bash
-source ~/titan_env/bin/activate
-export PYTHONPATH=~/torchtitan:$PYTHONPATH
+### Autoregressive Generation (`/generate`)
 
-python3 -m torch.distributed.run --nproc_per_node=8 ~/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_trainer.py \
-    --module=torchtitan.experiments.tpu.rl \
-    --config=grpo_qwen3_0_6b_glp
-```
-*(Wait until Uvicorn logs: `INFO: Uvicorn running on http://0.0.0.0:8000`).*
+1. The sampler receives `prompt_ids` (a batch of tokenized prompts, left-padded to a static `prompt_len` to prevent XLA recompilation).
+2. It calls `grpo_sampler.generate()` (see [grpo_sampler.py](../grpo_sampler.py)) which performs distributed autoregressive token-by-token generation.
+3. Generation uses `fsdp.FullyShardedDataParallel.summon_full_params()` to materialize full parameters before sampling, then operates directly on clean model logits with temperature scaling.
+4. The completed token IDs (prompt + generated tokens) are returned to the driver.
 
-### Terminal 2 — On Sampler VM (`t1v-n-cca1e90f-w-0`)
-Start the 8-chip FSDP Sampler server on port `8001`:
-```bash
-source ~/titan_env/bin/activate
-export PYTHONPATH=~/torchtitan:$PYTHONPATH
+### Weight Reload (`/update_weights`)
 
-python3 -m torch.distributed.run --nproc_per_node=8 ~/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_sampler.py \
-    --module=torchtitan.experiments.tpu.rl \
-    --config=grpo_qwen3_0_6b_glp
-```
-*(Wait until Uvicorn logs: `INFO: Uvicorn running on http://0.0.0.0:8001`).*
+The sampler downloads `/tmp/trainer_weights.pt` from the trainer via HTTP, converts plain CPU tensors to DTensors matching the sampler's FSDP mesh using `distribute_tensor()`, and calls `load_state_dict()`. This hot-reload takes ~50–100 milliseconds.
 
-### Terminal 3 — On Sampler VM (`t1v-n-cca1e90f-w-0`)
-Once both servers are actively listening, launch the orchestrator client. 
+### Micro-Batching
 
-> [!TIP]
-> **Internal VPC Routing**
-> When communicating between virtual machines inside Google Cloud VPCs, always use internal private IPv4 addresses (retrieved via `hostname -I` on the Trainer VM) or short internal VPC hostnames (`t1v-n-0f7bbb5c-w-0`). Do not use external `.gcpnode.com` FQDNs for cross-VM HTTP REST requests.
-
-#### Option A: Fast Verification Run (Sub-Second Steps)
-```bash
-source ~/titan_env/bin/activate
-export PYTHONPATH=~/torchtitan:$PYTHONPATH
-
-# Replace with the internal private IP of your Trainer VM (e.g., 10.142.0.84)
-export TRAINER_IP="10.142.0.84"
-export SAMPLER_IP="127.0.0.1"
-
-python3 ~/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/rl_driver.py
-```
-
-#### Option B: ~13-Minute Alternating Idle/Busy Duty Cycle (for Cloud Monitoring)
-To observe a perfectly balanced, symmetrical 50/50 alternating square-wave duty cycle on Google Cloud Metric Explorer (where the Sampler is busy at 100% duty cycle while the Trainer drops to 0.00% idle duty cycle, and vice versa), we scale the rollout volume and configure multi-epoch GRPO training:
-
-1. **`CPUCommandBroadcast` (Idle Hardware Liberation)**: Both [server_trainer.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_trainer.py) and [server_sampler.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_sampler.py) use local Linux CPU TCP sockets (`port 18000` and `18001`) instead of `torch.distributed.broadcast_object_list`. While waiting for HTTP commands, Ranks 1–7 block in OS kernel space on CPU `socket.recv()`, executing zero TPU hardware instructions and driving idle TPU duty cycle down to **0.00%**!
-2. **`MICRO_BATCH_SIZE=4` (OOM Prevention)**: [rl_driver.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/rl_driver.py) automatically slices generation and training requests into micro-batches of size 4 (~2.5 GB HBM per call), guaranteeing 100% OOM immunity across arbitrary rollout volumes.
-3. **50/50 Phase Symmetry**: By setting `PROMPTS_PER_STEP="8"`, `GROUP_SIZE="8"` (64 rollouts $\rightarrow$ 16 micro-batches), and `TRAIN_EPOCHS="8"` (8 PPO/GRPO epochs $\rightarrow$ 128 training steps):
-   - **Sampling Phase (~6.6 minutes)**: 16 micro-batches $\times$ ~24.7s = **~395s** of pure sampling (Trainer sits at **0.00%** duty cycle).
-   - **Training Phase (~6.3 minutes)**: 16 micro-batches $\times$ 8 epochs = 128 training steps $\times$ ~2.9s = **~379s** of solid training (Sampler sits at **0.00%** duty cycle).
-
-```bash
-source ~/titan_env/bin/activate
-export PYTHONPATH=~/torchtitan:$PYTHONPATH
-export TRAINER_IP="10.142.0.84"
-export SAMPLER_IP="127.0.0.1"
-
-# 64 rollouts (16 micro-batches of size 4)
-export PROMPTS_PER_STEP="8"
-export GROUP_SIZE="8"
-
-# 8 PPO/GRPO epochs -> 128 training calls -> ~6.3 minutes of solid training!
-export TRAIN_EPOCHS="8"
-export PROMPT_LEN="128"
-
-python3 ~/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/rl_driver.py
-```
+Both generation and training requests are chunked into **micro-batches of size 4** (~2.5 GB HBM per call) to guarantee 100% OOM immunity across arbitrary rollout volumes. This is controlled by `MICRO_BATCH_SIZE`, `ROLLOUT_BATCH_SIZE`, and `TRAIN_BATCH_SIZE` environment variables.
 
 ---
 
-## 5. What to Expect (Execution Lifecycle)
+## 4. Checkpoint & Restore (TPU HAL Snapshot)
 
-When [rl_driver.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/rl_driver.py) executes, it coordinates a continuous GRPO reinforcement learning loop on real GSM8K math reasoning prompts until convergence is reached:
+The checkpoint/restore mechanism is the core enabler for hardware oversubscription. It operates at the **TPU hardware level**, below PyTorch/XLA.
 
-```text
-Connecting to Trainer (10.142.0.84:8000) and Sampler (127.0.0.1:8001)
-Loaded 7473 GSM8K prompts.
-Loading TorchTitan tokenizer from 'tests/assets/tokenizer'...
-Config: 1000 max steps | 8 prompts/step | group_size=8 | prompt_len=128
-Convergence Target: Moving Avg Reward >= 1.90 over 20 steps
+### How It Works
 
---- Step 0 ---
-Generated 64 completions (16 micro-batches) in 395.30s | Reward: 0.000 (Moving Avg: 0.000) | Accuracy (Correct Rate): 0.00% | Format Rate: 0.00%
-  [Sample Rollout 0 (gt=5 | r=0.0)]:  decided getting...
-Trained 128 micro-batches (8 epochs) in 379.32s | Reward: 0.000 | Accuracy: 0.00% | KL: 0.0142 | Loss: -0.1523
-Synced weights across FSDP meshes in 9.04s
-...
-🎉 CONVERGENCE REACHED! Moving average reward (1.925) over the last 20 steps reached target (1.900)!
-```
+Each `libtpu.so` instance exposes a Unix domain socket at `/run/tpu_hal_<pid>.sock`. The [tpu_hal_snapshot.py](tpu_hal_snapshot.py) module:
 
-1. **Step 0 (XLA Graph Compilation)**: The first generation and training passes will take roughly **60 to 90 seconds** per phase as PyTorch/XLA compiles the distributed SPMD graphs across all 16 TPU chips.
-2. **Continuous Sub-Second Execution**: Once compiled, autoregressive generation and GRPO gradient updates execute in **~0.5 seconds** per micro-batch. By default, the loop runs for up to 1000 steps (`N_RL_STEPS=1000`).
-3. **Automated Convergence Detection**: The orchestrator tracks a sliding window moving average of the GSM8K reward (`CONVERGENCE_WINDOW=20`). When the moving average reaches `TARGET_REWARD=1.90` (~95% accuracy on GSM8K reasoning rollouts), training cleanly terminates!
-4. **Synchronous On-Policy Merging**: At the conclusion of each step, [rl_driver.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/rl_driver.py) triggers `/export_weights` on the Trainer and `/update_weights` on the Sampler. The Sampler downloads the updated state dict over HTTP and reloads it into FSDP in **~50–100 milliseconds**, guaranteeing 100% on-policy policy evolution without weight staleness.
-5. **Alternating Hardware Duty Cycle (Cloud Monitoring)**: When running Option B, Google Cloud Metric Explorer will display a sharp, symmetrical 50/50 alternating square wave. During the ~6.6-minute sampling window, the Sampler mesh operates at **100% duty cycle** while the Trainer mesh drops to **0.00%**. During the ~6.3-minute training window, the Trainer mesh operates at **100% duty cycle** while the Sampler mesh drops to **0.00%**. This proves complete hardware liberation during idle windows, enabling multi-tenant time-slicing and resource reallocation!
+1. **Discovers sockets** by scanning `/run/tpu_hal_*.sock` and filtering by cgroup to find only sockets belonging to the current pod/container.
+2. **Issues gRPC calls** via `grpcurl` subprocesses (to avoid symbol clashes between Python's `grpcio` and `libtpu.so`'s static gRPC):
+   - `tpu.TpuHalService/Checkpoint` — snapshots the live TPU VFIO device state to host memory.
+   - `tpu.TpuHalService/Restore` — restores the saved VFIO device state back to the TPU hardware.
+3. **Fans out concurrently** across all 8 sockets using a `ThreadPoolExecutor` (or sequentially if `CR_SEQUENTIAL=1`).
+
+### Custom `_libtpu.so`
+
+Time-slicing requires a custom-built `_libtpu.so` that supports the UDS-based `Checkpoint`/`Restore` gRPC methods. See the [deploy README](deploy/README.md) for download instructions.
+
+### Known Issue: Concurrent Restore Crash on v6e
+
+> [!WARNING]
+> On TPU v6e, concurrent `Restore` calls across all 8 sockets can trigger a **hard C++ segmentation fault** inside `libtpu.so`'s internal gRPC server. The crash occurs in `grpc::internal::CallbackUnaryHandler<...>::Deserialize()` due to a null-pointer dereference when the `tpunetd` daemon floods `NotifyRequest` callbacks during concurrent restores. A core dump was captured and analyzed — see the root cause analysis for full backtrace and disassembly.
 
 ---
 
-## 6. Advanced Integration: vLLM Inference on TPU (JAX POC Blueprint)
+## 5. Hardware Oversubscription (Time-Slicing)
 
-While [server_sampler.py](file:///usr/local/google/home/linglinll/clean/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/server_sampler.py) currently uses native TorchTitan FSDP sampling for 100% architectural and state dict compatibility with the trainer, you can also swap the sampler for **vLLM on TPU** to achieve higher generation throughput via PagedAttention and continuous batching.
+The key innovation: **two independent RL jobs share the same physical TPU nodes**, but never use them simultaneously. When one job is sampling, the other is training on a different node — and vice versa.
 
-This pattern follows the proven blueprint in `~/clean/rl-time-slicing/tpu-rl-jax-poc/sampler/sampler.py`:
-1. **Standalone vLLM Service**: Run a FastAPI service on the sampler VM wrapping `vllm.LLM(model=..., tensor_parallel_size=8, dtype="bfloat16")`.
-2. **Weight Conversion & Export**: Because vLLM expects HuggingFace naming conventions (e.g., `model.layers.0.self_attn.q_proj.weight` instead of TorchTitan's `layers.0.attention.wq.weight`), the trainer must map parameter names during `/export_weights` using TorchTitan's conversion utilities (`convert_from_hf.py`) and export them as `.safetensors`.
-3. **Hot-Swapping via `collective_rpc`**: On TPU, vLLM runs worker subprocesses using `torchax` (PyTorch on JAX/XLA). To reload weights without restarting vLLM, use vLLM's `collective_rpc` with `torchax.default_env()` to copy downloaded safetensors directly into the live worker parameters:
-   ```python
-   def _reload_weights_on_worker(worker, weights_path: str):
-       import torchax
-       from safetensors.numpy import load_file
-       model = worker.model_runner.model.model.vllm_model
-       tensors = load_file(weights_path)
-       
-       with torchax.default_env():
-           for name, param in model.named_parameters():
-               if name in tensors:
-                   param.data.copy_(torch.from_numpy(tensors[name]))
-   
-   # Triggered on Sampler API endpoint:
-   llm.llm_engine.collective_rpc(_reload_weights_on_worker, args=(weights_path,))
-   ```
+### Time-Slicing Flow
+
+```mermaid
+sequenceDiagram
+    participant DA as Driver A
+    participant DB as Driver B
+    participant ORCH as Orchestrator
+    participant SA as Sampler (Node 2)
+    participant TB as Trainer B (Node 1)
+
+    DA->>ORCH: /acquire {workload: jobA_sampler}
+    ORCH->>SA: /restore (TPU HAL Restore)
+    SA-->>ORCH: ok
+    ORCH-->>DA: acquired
+    DA->>SA: /generate (autoregressive sampling)
+    DA->>ORCH: /yield {workload: jobA_sampler}
+    ORCH->>SA: /checkpoint (TPU HAL Checkpoint)
+    SA-->>ORCH: ok
+    ORCH-->>DA: yielded
+
+    DB->>ORCH: /acquire {workload: jobB_trainer}
+    ORCH->>TB: /restore (TPU HAL Restore)
+    TB-->>ORCH: ok
+    ORCH-->>DB: acquired
+    DB->>TB: /train (GRPO backprop)
+    DB->>ORCH: /yield {workload: jobB_trainer}
+    ORCH->>TB: /checkpoint (TPU HAL Checkpoint)
+    TB-->>ORCH: ok
+    ORCH-->>DB: yielded
+```
+
+### Pool-Based Locking
+
+The orchestrator ([orchestrator.py](orchestrator.py)) manages two independent lock pools:
+
+| Pool | TPU Node | Workloads |
+|------|----------|-----------|
+| `sampler` | Node 2 | `jobA_sampler`, `jobB_sampler` |
+| `trainer` | Node 1 | `jobA_trainer`, `jobB_trainer` |
+
+- **`/acquire`**: A driver requests exclusive access to a pool. The orchestrator blocks on a `threading.Lock` until the pool is free. If the pool's previous holder checkpointed, the orchestrator calls `/restore` on the new workload's HTTP endpoint to restore TPU state.
+- **`/yield`**: The driver releases the pool. The orchestrator calls `/checkpoint` on the workload's HTTP endpoint to snapshot TPU state, then releases the lock.
+
+
+---
+
+## 6. Orchestrating Two RL Jobs
+
+The system runs **two completely independent GRPO training loops** (Job A and Job B) simultaneously, each with its own trainer, sampler, and driver. They share the same two TPU nodes via time-slicing.
+
+### Kubernetes Deployment
+
+The deployment manifest ([deploy/rl-disagg.yaml](deploy/rl-disagg.yaml)) creates:
+
+| Pod | Node | Role |
+|-----|------|------|
+| `trainer-a` | Node 1 (trainer pool) | Job A trainer (port 8000) |
+| `sampler-a` | Node 2 (sampler pool) | Job A sampler (port 8001) |
+| `trainer-b` | Node 1 (via podAffinity to trainer-a) | Job B trainer (port 8002) |
+| `sampler-b` | Node 2 (via podAffinity to sampler-a) | Job B sampler (port 8003) |
+| `driver-a-job` | Any | Job A orchestrator client |
+| `driver-b-job` | Any | Job B orchestrator client |
+| `orchestrator-deployment` | Any | Centralized lock manager (port 9000) |
+
+### Pod Affinity Co-location
+
+Job B's trainer uses a `podAffinity` to co-locate on the same node as Job A's trainer:
+
+```yaml
+affinity:
+  podAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+    - labelSelector:
+        matchExpressions:
+        - key: app
+          operator: In
+          values:
+          - trainer-a
+      topologyKey: kubernetes.io/hostname
+```
+
+This ensures both trainers share the same physical TPU node (and thus the same VFIO devices), enabling the checkpoint/restore handoff. The same applies to the samplers.
+
+### Job B's Direct VFIO Access
+
+Job B's trainer and sampler pods are configured with:
+- `securityContext.privileged: true`
+- Direct `/dev/vfio` hostPath mount
+- `TPU_ACCELERATOR_TYPE`, `TPU_TOPOLOGY`, and related environment variables
+- These allow the second job to directly access the TPU VFIO devices without the GKE TPU resource scheduler
+
+### Driver Orchestration
+
+Each driver ([rl_driver.py](rl_driver.py)) runs its own RL loop independently:
+
+1. **Register** both its sampler and trainer workloads with the orchestrator.
+2. **Acquire** the sampler pool → orchestrator restores TPU state → driver calls `/start` → driver calls `/generate` in micro-batches.
+3. **Yield** the sampler pool → orchestrator checkpoints TPU state.
+4. **Acquire** the trainer pool → orchestrator restores TPU state → driver calls `/start` → driver calls `/train` across multiple GRPO epochs.
+5. **Export** updated weights from trainer → **yield** trainer pool → **acquire** sampler pool → **update** sampler weights → hold sampler lock for next iteration.
+
+The `holding_sampler` optimization skips the checkpoint/restore cycle when the same job holds the sampler pool across consecutive steps (e.g., after weight sync, the sampler stays acquired for the next generation phase).
+
+---
