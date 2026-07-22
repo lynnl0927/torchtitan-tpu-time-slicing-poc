@@ -178,8 +178,10 @@ class RayRLTrainer(RLTrainer):
         generator_env_vars = build_generator_env_vars(layout, worker_pythonpath)
             
         generator_resources = {}
-        if not is_local_run and self.generator_world_size <= chips_per_host:
-            generator_resources["TPU"] = self.generator_world_size
+        # Note: Do NOT request TPU resources here. vLLM creates its own placement group
+        # internally for TPU workers. Requesting TPU here would double-count and exhaust
+        # the node's resources. The NodeAffinity strategy below pins this actor to the
+        # correct generator node.
 
         generator_actor = RayVLLMGenerator.options(
             resources=generator_resources,

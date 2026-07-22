@@ -3,7 +3,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: ray-ksa 
-  namespace: default # Change this if your Ray cluster is in a different namespace
+  namespace: ray
   annotations:
       iam.gke.io/gcp-service-account: ray-tpu-gsa@tpu-pytorch.iam.gserviceaccount.com
 ---
@@ -14,7 +14,7 @@ metadata:
 subjects:
 - kind: ServiceAccount
   name: ray-ksa
-  namespace: default # Must match the namespace of the ServiceAccount above
+  namespace: ray
 roleRef:
   kind: ClusterRole
   name: cluster-admin # Only for testing, should use a more restrictive role in prod
@@ -24,6 +24,7 @@ apiVersion: ray.io/v1
 kind: RayCluster
 metadata:
   name: ray-tpu-v6e-cluster
+  namespace: ray
 spec:
   headGroupSpec:
     rayStartParams: {}
@@ -33,9 +34,29 @@ spec:
           gke-gcsfuse/volumes: "true"
       spec:
         serviceAccountName: ray-ksa
+        tolerations:
+        - key: "google.com/tpu"
+          value: "present"
+          effect: "NoSchedule"
+        nodeSelector:
+          cloud.google.com/gke-nodepool: tpu-v6e-spot
+        initContainers:
+          - name: download-model
+            image: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+            command: ["/bin/bash", "-c"]
+            args:
+              - |
+                mkdir -p /data/assets/hf/Qwen3-0.6B
+                mkdir -p /data/jialei
+                gcloud storage cp -r gs://rl-linglinll-gke-dev/models/Qwen3-0.6B/* /data/assets/hf/Qwen3-0.6B/
+                echo "Model downloaded successfully"
+                ls -la /data/assets/hf/Qwen3-0.6B/
+            volumeMounts:
+            - name: model-volume
+              mountPath: /data
         containers:
           - name: ray-head
-            image: us-west2-docker.pkg.dev/tpu-pytorch/raycluster/torchtitan-ray:vllm-0612
+            image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-ray:vllm-0612
             imagePullPolicy: Always
             env:
             - name: RAY_TRAIN_V2_ENABLED
@@ -56,22 +77,19 @@ spec:
                 cpu: "12"
                 memory: "48Gi"
               requests:
-                cpu: "12"
-                memory: "48Gi"
+                cpu: "8"
+                memory: "32Gi"
             volumeMounts:
-            - name: gcs-volume
+            - name: model-volume
               mountPath: /data
         volumes:
-        - name: gcs-volume
-          csi:
-            driver: gcsfuse.csi.storage.gke.io
-            volumeAttributes:
-              bucketName: torchprime
-              mountOptions: "implicit-dirs"
+        - name: model-volume
+          emptyDir:
+            sizeLimit: 50Gi
   workerGroupSpecs:
-    - replicas: 2 # use 2 slices
-      numOfHosts: 2 # 2 host v6e8 chips 
-      groupName: tpu-group
+    - replicas: 1 # 1 trainer worker pod
+      numOfHosts: 1
+      groupName: trainer-group
       rayStartParams: {}
       template:
         metadata:
@@ -79,20 +97,41 @@ spec:
             gke-gcsfuse/volumes: "true"
         spec:
           serviceAccountName: ray-ksa
+          tolerations:
+          - key: "google.com/tpu"
+            value: "present"
+            effect: "NoSchedule"
+          nodeSelector:
+            cloud.google.com/gke-tpu-accelerator: tpu-v6e-slice
+            cloud.google.com/gke-tpu-topology: 2x4
+            cloud.google.com/gke-accelerator-count: "8"
+            cloud.google.com/gke-nodepool: tpu-v6e-spot
+          initContainers:
+            - name: download-model
+              image: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  mkdir -p /data/assets/hf/Qwen3-0.6B
+                  mkdir -p /data/jialei
+                  gcloud storage cp -r gs://rl-linglinll-gke-dev/models/Qwen3-0.6B/* /data/assets/hf/Qwen3-0.6B/
+                  echo "Model downloaded successfully"
+                  ls -la /data/assets/hf/Qwen3-0.6B/
+              volumeMounts:
+              - name: model-volume
+                mountPath: /data
           containers:
             - name: ray-worker
-              image: us-west2-docker.pkg.dev/tpu-pytorch/raycluster/torchtitan-ray:vllm-0612
+              image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-ray:vllm-0612
               imagePullPolicy: Always
               resources:
                 limits:
                   memory: "200Gi"
-                  # Each Worker node has 4 TPU chips.
-                  google.com/tpu: "4"
+                  google.com/tpu: "8"
                 requests:
                   cpu: "48"
                   memory: "200Gi"
-                  # Each Worker node has 4 TPU chips.
-                  google.com/tpu: "4"
+                  google.com/tpu: "8"
               env:
                 - name: RAY_TRAIN_V2_ENABLED
                   value: "1"
@@ -103,16 +142,70 @@ spec:
                       key: hf_token
                       optional: true
               volumeMounts:
-              - name: gcs-volume
+              - name: model-volume
                 mountPath: /data
           volumes:
-          - name: gcs-volume
-            csi:
-              driver: gcsfuse.csi.storage.gke.io
-              volumeAttributes:
-                bucketName: torchprime
-                mountOptions: "implicit-dirs"
+          - name: model-volume
+            emptyDir:
+              sizeLimit: 50Gi
+    - replicas: 1 # 1 generator worker pod
+      numOfHosts: 1
+      groupName: generator-group
+      rayStartParams: {}
+      template:
+        metadata:
+          annotations:
+            gke-gcsfuse/volumes: "true"
+        spec:
+          serviceAccountName: ray-ksa
+          tolerations:
+          - key: "google.com/tpu"
+            value: "present"
+            effect: "NoSchedule"
+          initContainers:
+            - name: download-model
+              image: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  mkdir -p /data/assets/hf/Qwen3-0.6B
+                  mkdir -p /data/jialei
+                  gcloud storage cp -r gs://rl-linglinll-gke-dev/models/Qwen3-0.6B/* /data/assets/hf/Qwen3-0.6B/
+                  echo "Model downloaded successfully"
+                  ls -la /data/assets/hf/Qwen3-0.6B/
+              volumeMounts:
+              - name: model-volume
+                mountPath: /data
+          containers:
+            - name: ray-worker
+              image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-ray:vllm-0612
+              imagePullPolicy: Always
+              resources:
+                limits:
+                  memory: "200Gi"
+                  google.com/tpu: "8"
+                requests:
+                  cpu: "48"
+                  memory: "200Gi"
+                  google.com/tpu: "8"
+              env:
+                - name: RAY_TRAIN_V2_ENABLED
+                  value: "1"
+                - name: HF_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: hf-secret
+                      key: hf_token
+                      optional: true
+              volumeMounts:
+              - name: model-volume
+                mountPath: /data
+          volumes:
+          - name: model-volume
+            emptyDir:
+              sizeLimit: 50Gi
           nodeSelector:
-            # Change this according to the TPU slice topology.
             cloud.google.com/gke-tpu-accelerator: tpu-v6e-slice
-            cloud.google.com/gke-tpu-topology: 2x4  # v6e8 chips 
+            cloud.google.com/gke-tpu-topology: 2x4
+            cloud.google.com/gke-accelerator-count: "8"
+            cloud.google.com/gke-nodepool: tpu-v6e-generator
