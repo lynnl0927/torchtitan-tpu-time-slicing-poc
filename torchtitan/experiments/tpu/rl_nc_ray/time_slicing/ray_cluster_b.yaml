@@ -1,0 +1,94 @@
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: ts-cluster-b
+  namespace: default
+spec:
+  headGroupSpec:
+    rayStartParams: {}
+    template:
+      spec:
+        nodeSelector:
+          cloud.google.com/gke-nodepool: ray-head-pool
+        containers:
+        - name: ray-head
+          image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-ray:vllm-0612
+          imagePullPolicy: IfNotPresent
+          ports:
+          - containerPort: 8265
+          - containerPort: 10001
+          - containerPort: 6379
+          resources:
+            requests: {cpu: "2", memory: 8Gi}
+            limits: {cpu: "4", memory: 12Gi}
+  workerGroupSpecs:
+  - groupName: worker-b
+    replicas: 1
+    minReplicas: 1
+    maxReplicas: 1
+    numOfHosts: 1
+    # Declare TPU:8 to Ray B's own scheduler even though we take NO google.com/tpu
+    # from the k8s device plugin — we reach the chips via privileged VFIO instead.
+    rayStartParams:
+      resources: '"{\"TPU\": 8}"'
+    template:
+      spec:
+        # Job-B pattern: no google.com/tpu request, so the scheduler places us on a
+        # node the plugin considers "full". Force colocation onto cluster A's TPU
+        # worker node and tolerate the TPU taint.
+        affinity:
+          podAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                - {key: ray.io/cluster, operator: In, values: [ts-cluster-a]}
+                - {key: ray.io/group, operator: In, values: [worker-a]}
+              topologyKey: kubernetes.io/hostname
+        tolerations:
+        - key: google.com/tpu
+          operator: Equal
+          value: present
+          effect: NoSchedule
+        initContainers:
+        - name: stage-libtpu
+          image: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+          command: ["/bin/bash","-c"]
+          args:
+          - |
+            set -e
+            gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpu.so /shared/_libtpu.so
+            ls -la /shared/_libtpu.so
+          volumeMounts:
+          - {mountPath: /shared, name: shared}
+        containers:
+        - name: ray-worker
+          image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-ray:vllm-0612
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          env:
+          - {name: TPU_LIBRARY_PATH, value: /shared/_libtpu.so}
+          - {name: TPU_ACCELERATOR_TYPE, value: v5litepod-8}
+          - {name: TPU_TOPOLOGY, value: "2x4"}
+          - {name: TPU_CHIPS_PER_HOST_BOUNDS, value: "2,4,1"}
+          - {name: TPU_HOST_BOUNDS, value: "1,1,1"}
+          - {name: TPU_WORKER_ID, value: "0"}
+          - {name: TPU_WORKER_HOSTNAMES, value: localhost}
+          - {name: TPU_SKIP_MDS_QUERY, value: "true"}
+          - {name: TPU_TOPOLOGY_ALT, value: "false"}
+          - {name: TPU_TOPOLOGY_WRAP, value: "false,false,false"}
+          - {name: TPU_RUNTIME_METRICS_PORTS, value: "8451,8452,8453,8454,8455,8456,8457,8458"}
+          - {name: VBAR_CONTROL_SERVICE_URL, value: "unix:///var/run/tpu-plugin/vbar.sock"}
+          resources:
+            requests: {cpu: "24", memory: 100Gi}
+            limits: {memory: 100Gi}
+          volumeMounts:
+          - {mountPath: /shared, name: shared}
+          - {mountPath: /dev/vfio, name: host-dev-vfio}
+          - {mountPath: /var/run/tpu-plugin, name: tpu-plugin}
+          - {mountPath: /dev/shm, name: dshm}
+        volumes:
+        - {emptyDir: {}, name: shared}
+        - {hostPath: {path: /dev/vfio}, name: host-dev-vfio}
+        - {hostPath: {path: /var/run/tpu-plugin}, name: tpu-plugin}
+        - {emptyDir: {medium: Memory}, name: dshm}

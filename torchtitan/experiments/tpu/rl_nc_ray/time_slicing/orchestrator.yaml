@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ts-orchestrator
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: ts-orchestrator}
+  template:
+    metadata:
+      labels: {app: ts-orchestrator}
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-nodepool: ray-head-pool
+      containers:
+      - name: orch
+        image: python:3.11-slim
+        command: ["python3", "/app/orchestrator.py"]
+        env:
+        - {name: ORCH_PORT, value: "9000"}
+        ports:
+        - containerPort: 9000
+        resources:
+          requests: {cpu: "250m", memory: 256Mi}
+          limits: {cpu: "1", memory: 512Mi}
+        volumeMounts:
+        - {mountPath: /app, name: script}
+      volumes:
+      - name: script
+        configMap: {name: ts-orch-script}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ts-orchestrator
+  namespace: default
+spec:
+  selector: {app: ts-orchestrator}
+  ports:
+  - {port: 9000, targetPort: 9000}
