@@ -1,3 +1,8 @@
+# RL Job A — disaggregated: gen-a on the generator node, train-a on the trainer
+# node. Both worker groups request google.com/tpu:8, so the k8s scheduler places
+# them on the two different v5e-8chip nodes (each node fits exactly one).
+# Job A is the "device plugin owner" of both nodes; Job B (ray_cluster_b.yaml)
+# colocates onto the same nodes without a TPU request.
 apiVersion: ray.io/v1
 kind: RayCluster
 metadata:
@@ -22,7 +27,52 @@ spec:
             requests: {cpu: "2", memory: 8Gi}
             limits: {cpu: "4", memory: 12Gi}
   workerGroupSpecs:
-  - groupName: worker-a
+  - groupName: gen-a
+    replicas: 1
+    minReplicas: 1
+    maxReplicas: 1
+    numOfHosts: 1
+    rayStartParams: {}
+    template:
+      spec:
+        nodeSelector:
+          cloud.google.com/gke-nodepool: tpu-v5e-8chip
+          cloud.google.com/gke-tpu-accelerator: tpu-v5-lite-podslice
+          cloud.google.com/gke-tpu-topology: "2x4"
+        tolerations:
+        - key: google.com/tpu
+          operator: Equal
+          value: present
+          effect: NoSchedule
+        initContainers:
+        - name: stage-libtpu
+          image: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+          command: ["/bin/bash","-c"]
+          args:
+          - |
+            set -e
+            gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpu.so /shared/_libtpu.so
+            ls -la /shared/_libtpu.so
+          volumeMounts:
+          - {mountPath: /shared, name: shared}
+        containers:
+        - name: ray-worker
+          image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-ray:vllm-0612
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          env:
+          - {name: TPU_LIBRARY_PATH, value: /shared/_libtpu.so}
+          resources:
+            requests: {cpu: "24", google.com/tpu: "8", memory: 100Gi}
+            limits: {google.com/tpu: "8", memory: 100Gi}
+          volumeMounts:
+          - {mountPath: /shared, name: shared}
+          - {mountPath: /dev/shm, name: dshm}
+        volumes:
+        - {emptyDir: {}, name: shared}
+        - {emptyDir: {medium: Memory}, name: dshm}
+  - groupName: train-a
     replicas: 1
     minReplicas: 1
     maxReplicas: 1
