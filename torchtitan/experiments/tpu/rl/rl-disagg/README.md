@@ -105,24 +105,58 @@ Both generation and training requests are chunked into **micro-batches of size 4
 
 The checkpoint/restore mechanism is the core enabler for hardware oversubscription. It operates at the **TPU hardware level**, below PyTorch/XLA.
 
-### How It Works
+### How It Works (libtpu v2 — gVisor `tpu_control` pipes)
 
-Each `libtpu.so` instance exposes a Unix domain socket at `/run/tpu_hal_<pid>.sock`. The [tpu_hal_snapshot.py](tpu_hal_snapshot.py) module:
+Checkpointing must be enabled with `LIBTPU_CHECKPOINTING_ENABLED=true` in the
+TPU worker env (libtpu logs `TPU Checkpointing is enabled` to
+`/tmp/tpu_logs/tpu_driver.*.INFO.*`). Each TPU process then spawns a control
+thread named `libtpu{RRRRSSSS}`, where `RRRR`/`SSSS` are the hex FD numbers of
+a request-write / response-read pipe pair (the protocol from gVisor's
+`pkg/sentry/control/tpu_control.proto`). The [tpu_hal_snapshot.py](tpu_hal_snapshot.py) module:
 
-1. **Discovers sockets** by scanning `/run/tpu_hal_*.sock` and filtering by cgroup to find only sockets belonging to the current pod/container.
-2. **Issues gRPC calls** via `grpcurl` subprocesses (to avoid symbol clashes between Python's `grpcio` and `libtpu.so`'s static gRPC):
-   - `tpu.TpuHalService/Checkpoint` — snapshots the live TPU VFIO device state to host memory.
-   - `tpu.TpuHalService/Restore` — restores the saved VFIO device state back to the TPU hardware.
-3. **Fans out concurrently** across all 8 sockets using a `ThreadPoolExecutor` (or sequentially if `CR_SEQUENTIAL=1`).
+1. **Discovers TPU processes** by scanning `/proc/<pid>/task/*/comm` for those
+   thread names — one control thread per rank process, 8 per pod. The
+   container's PID namespace provides pod isolation (no cgroup filter needed).
+2. **Sends control messages** through `/proc/<pid>/fd/<N>`: a 4-byte
+   big-endian length-prefixed protobuf `ControlRequest{action, timeout_secs}`
+   with `CHECKPOINT=2` (snapshots the live TPU VFIO device state to host
+   memory, state → `detached`) or `RESTORE=3` (state → `running`).
+3. **Fans out concurrently** across all 8 rank PIDs using a
+   `ThreadPoolExecutor` (or sequentially if `CR_SEQUENTIAL=1`).
+
+Measured on v5e: checkpoint ≈ 1.9–2.9 s, restore ≈ 3.8–4.8 s per pod.
+
+> [!IMPORTANT]
+> A detached process must issue **no TPU operations** until restored, or it
+> aborts with `enqueueProgram ... Current state: TearedDown`. The servers'
+> CPU-blocked SPMD command loop satisfies this while waiting for HTTP commands.
+
+A standalone Go CLI implementing the same protocol lives in
+[`../tpu-checkpoint`](../tpu-checkpoint) (`tpu-checkpoint --pid <pid> --action checkpoint|restore`).
 
 ### Custom `_libtpu.so`
 
-Time-slicing requires a custom-built `_libtpu.so` that supports the UDS-based `Checkpoint`/`Restore` gRPC methods. See the [deploy README](deploy/README.md) for download instructions.
+Time-slicing requires a custom libtpu build with checkpointing support. The
+current build is `gs://linglinll-gke-dev-libtpu/_libtpuv2.so`, staged into the
+worker pods by a `stage-libtpu` initContainer and selected via
+`TPU_LIBRARY_PATH=/shared/_libtpuv2.so` (see [deploy/rl-disagg.yaml](deploy/rl-disagg.yaml)).
+v2 also fixes runtime metrics: `RuntimeMetricService` (ports 8431+, or
+`TPU_RUNTIME_METRICS_PORTS`) now reports real per-chip duty cycle
+(`tpu.runtime.tensorcore.dutycycle.percent`), so `tpu-info` works for pods on
+the default metric ports.
 
-### Known Issue: Concurrent Restore Crash on v6e
+The previous build (`_libtpu.so`) exposed C/R as a `tpu.TpuHalService` gRPC
+server on `/run/tpu_hal_<pid>.sock`; that API was removed in v2 — the old
+UDS/grpcurl flow finds no sockets and silently no-ops.
+
+### Known Issue: Concurrent Restore Crash on v6e (old `_libtpu.so`)
 
 > [!WARNING]
-> On TPU v6e, concurrent `Restore` calls across all 8 sockets can trigger a **hard C++ segmentation fault** inside `libtpu.so`'s internal gRPC server. The crash occurs in `grpc::internal::CallbackUnaryHandler<...>::Deserialize()` due to a null-pointer dereference when the `tpunetd` daemon floods `NotifyRequest` callbacks during concurrent restores. A core dump was captured and analyzed — see the root cause analysis for full backtrace and disassembly.
+> With the **previous UDS-based build** on TPU v6e, concurrent `Restore` calls
+> across all 8 sockets could trigger a hard C++ segmentation fault inside
+> `libtpu.so`'s internal gRPC server (`CallbackUnaryHandler<...>::Deserialize()`
+> null-pointer dereference under `tpunetd` `NotifyRequest` floods). Not yet
+> re-tested with v2's pipe-based protocol.
 
 ---
 

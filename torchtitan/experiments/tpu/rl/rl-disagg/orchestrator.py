@@ -277,13 +277,16 @@ def health():
 
 @app.post("/register")
 def register(req: RegisterRequest):
+    prior = workloads.get(req.workload_id)
     workloads[req.workload_id] = {
         "pool": req.pool,
         "pids": req.pids,
-        "step": 0,
+        "step": prior["step"] if prior else 0,
         "node": req.node,
         "url": req.url,
-        "checkpointed": False,
+        # Preserve C/R state across driver restarts: re-registering must not
+        # erase the fact that this workload's device state is checkpointed.
+        "checkpointed": prior["checkpointed"] if prior else False,
     }
     log.info(f"[{req.workload_id}] Registered pool={req.pool} pids={req.pids} node={req.node}")
     _log_metric({"type": "register", "workload_id": req.workload_id, "pool": req.pool, "pids": req.pids})
@@ -305,6 +308,13 @@ def acquire(req: AcquireYieldRequest):
     pool = wl["pool"]
     lock = get_pool_lock(pool)
     t_wait_start = time.time()
+
+    if pool_holders.get(pool) == req.workload_id:
+        # Reentrant acquire (e.g. a restarted driver re-acquiring its own
+        # pool): it already holds the lock; don't block on it forever.
+        log.info(f"[{req.workload_id}] Re-acquire of already-held pool={pool}; returning immediately")
+        wl["step"] += 1
+        return {"status": "ok", "pool": pool, "step": wl["step"], "wait_ms": 0, "restore_ms": 0}
 
     log.info(f"[{req.workload_id}] Acquiring pool={pool} (holder={pool_holders.get(pool)})")
     lock.acquire()

@@ -2,64 +2,74 @@
 
 This guide walks you through deploying the fully disaggregated two-job time-slicing RL workload on Google Kubernetes Engine (GKE) using TPU v5e (`v5litepod-8`).
 
-## 1. Download the Custom `_libtpu.so`
+## 1. The Custom libtpu (`_libtpuv2.so`)
 
-To enable time-slicing (UDS-based checkpoint/restore), you need the custom-built `_libtpu.so` library.
+Time-slicing requires a custom libtpu build with checkpoint/restore support.
+The current build is **`gs://linglinll-gke-dev-libtpu/_libtpuv2.so`** (pipe-based
+`tpu_control` C/R + working duty-cycle metrics; see the main
+[README §4](../README.md)). You do **not** need to download it or bake it into
+the image: `rl-disagg.yaml` stages it into each TPU worker with a
+`stage-libtpu` initContainer and selects it via
+`TPU_LIBRARY_PATH=/shared/_libtpuv2.so`, alongside
+`LIBTPU_CHECKPOINTING_ENABLED=true` (both are required for C/R to exist at all
+in v2). To roll out a new libtpu build, upload it to the bucket and update the
+two references in the manifest — no image rebuild needed.
 
-1. Download the `.so` file from the GCS bucket directly into the **root** of your `torchtitan` repository:
-   ```bash
-   cd /path/to/torchtitan
-   gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpu.so ./_libtpu.so
-   ```
+The GCS bucket is the **only** source of the checkpointing libtpu — the image
+does not bake one in. Without the manifest's `TPU_LIBRARY_PATH` override, the
+pip-installed `libtpu` package is used (fine for plain runs; no C/R).
 
-Your directory structure should look like this:
-```text
-torchtitan/
-├── _libtpu.so              <-- Place it here!
-├── torchtitan/
-│   ├── experiments/tpu/rl/rl-disagg/
-│   │   ├── deploy/
-│   │   │   ├── Dockerfile
-│   │   │   └── rl-disagg.yaml
-...
-```
-
-*(Note: The Dockerfile uses `COPY _libtpu.so /app/_libtpu.so`, which expects the file to be present in the Docker build context—i.e., the repository root).*
+> [!IMPORTANT]
+> The image must contain the **v2-aware** `tpu_hal_snapshot.py` (pipe protocol)
+> and `orchestrator.py` from this directory. If your image tag predates those
+> changes, rebuild it (step 2) — or overlay the two files with a ConfigMap
+> mounted via `subPath` over
+> `/app/torchtitan/torchtitan/experiments/tpu/rl/rl-disagg/`.
 
 ## 2. Build and Push the Docker Image
 
-The Dockerfile installs `torch_tpu` from an authenticated artifact registry, so you must pass your GCP token during the build.
+The internal `torch_tpu` wheel is installed from a local `wheels/` directory in
+the build context (a token build-arg would leak the credential into the image's
+build history, so we pre-download instead).
 
 1. Set your GCP environment variables:
    ```bash
    export PROJECT_ID="your-gcp-project-id"
    export REGION="us-central1"
    export REPO_NAME="your-artifact-repo"
-   export IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/torchtitan-rl-disagg:latest"
+   export IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/torchtitan-rl:libtpuv2"
    ```
 
-2. Authenticate and obtain an access token:
+2. Pre-download the `torch_tpu` wheel into the repo root (gitignored). The
+   wheels are linux/x86_64 (`manylinux_2_31`, cp312) — pass the platform flags
+   when downloading from a non-linux machine:
    ```bash
-   gcloud auth login
+   cd /path/to/torchtitan && mkdir -p wheels
+   pip download --pre --no-deps --only-binary=:all: \
+     --platform manylinux_2_31_x86_64 --python-version 3.12 \
+     --implementation cp --abi cp312 \
+     --index-url "https://oauth2accesstoken:$(gcloud auth print-access-token)@us-python.pkg.dev/ml-oss-artifacts-transient/torch-tpu-virtual-registry/simple/" \
+     torch_tpu -d wheels/
+   ```
+
+3. Build and push from the **root of the repository** — either with Cloud
+   Build (no local Docker needed; keep a `.gcloudignore` that excludes `.git/`
+   but NOT `wheels/`):
+   ```bash
+   gcloud builds submit --project $PROJECT_ID --region $REGION \
+     --config torchtitan/experiments/tpu/rl/rl-disagg/deploy/cloudbuild.yaml .
+   ```
+   or locally (the `RUN --mount` in the Dockerfile requires BuildKit):
+   ```bash
    gcloud auth configure-docker ${REGION}-docker.pkg.dev
-   export GCP_TOKEN=$(gcloud auth print-access-token)
-   ```
-
-3. Build the Docker image from the **root of the repository**:
-   ```bash
-   # Navigate to the root of the torchtitan repository
-   cd /path/to/torchtitan
-   
-   docker build \
-     --build-arg GCP_TOKEN=$GCP_TOKEN \
+   DOCKER_BUILDKIT=1 docker build --platform linux/amd64 \
      -t $IMAGE_NAME \
      -f torchtitan/experiments/tpu/rl/rl-disagg/deploy/Dockerfile .
-   ```
-
-4. Push the image to Artifact Registry:
-   ```bash
    docker push $IMAGE_NAME
    ```
+
+Note the image no longer contains any libtpu at `/app/_libtpu.so` — the
+checkpointing libtpu comes solely from the GCS bucket at pod startup (§1).
 
 ## 3. Running a One-Job Baseline (Without C/R)
 

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM python:3.12-slim
 
 # Install system dependencies
@@ -25,18 +26,16 @@ RUN pip install --no-cache-dir libtpu==0.0.40 -f https://storage.googleapis.com/
 # 5. Re-verify HTTP server dependencies
 RUN pip install --no-cache-dir fastapi uvicorn requests grpcio
 
-# 6. Install the internal torch_tpu wheel directly from artifact registry
-ARG GCP_TOKEN
-RUN pip install --no-cache-dir --pre --no-deps \
-    --index-url "https://oauth2accesstoken:${GCP_TOKEN}@us-python.pkg.dev/ml-oss-artifacts-transient/torch-tpu-virtual-registry/simple/" \
-    torch_tpu
+# 6. Install the internal torch_tpu wheel from the build context (pre-download
+# it into ./wheels with your own credentials — see deploy/README.md; a token
+# build-arg would leak the credential into the image's build history).
+# The bind mount keeps the 122 MB wheel out of the image layers.
+RUN --mount=type=bind,source=wheels,target=/tmp/wheels \
+    pip install --no-cache-dir --no-deps /tmp/wheels/torch_tpu-*.whl
 
 # 7. Copy the torchtitan codebase
 COPY . /app/torchtitan
 WORKDIR /app/torchtitan
-
-# 7.5 Copy the custom UDS-enabled libtpu directly
-COPY _libtpu.so /app/_libtpu.so
 
 # 8. Install TorchTitan project dependencies
 RUN pip install --no-cache-dir -r requirements.txt
@@ -46,5 +45,7 @@ RUN pip install --no-cache-dir 'typeguard==2.13.3'
 # 9. Set the environment variable for Python
 ENV PYTHONPATH=/app/torchtitan:$PYTHONPATH
 
-# 10. Set the custom TPU library path
-ENV TPU_LIBRARY_PATH=/app/_libtpu.so
+# The custom checkpointing libtpu (_libtpuv2.so) is intentionally NOT baked
+# into this image: rl-disagg.yaml stages it from GCS via the stage-libtpu
+# initContainer and sets TPU_LIBRARY_PATH=/shared/_libtpuv2.so. Without that
+# override, the pip-installed `libtpu` package is used (no checkpoint/restore).

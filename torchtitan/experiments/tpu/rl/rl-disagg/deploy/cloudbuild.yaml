@@ -1,0 +1,20 @@
+# Cloud Build config for the rl-disagg image. Submit from the REPO ROOT:
+#   gcloud builds submit --project linglinll-gke-dev --region us-central1 \
+#     --config torchtitan/experiments/tpu/rl/rl-disagg/deploy/cloudbuild.yaml .
+# Prereq: the torch_tpu wheel pre-downloaded into ./wheels (see README.md §2),
+# and a .gcloudignore that excludes .git/ but not wheels/.
+steps:
+- name: gcr.io/cloud-builders/docker
+  env: ['DOCKER_BUILDKIT=1']
+  args:
+  - build
+  - -t
+  - us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv2
+  - -f
+  - torchtitan/experiments/tpu/rl/rl-disagg/deploy/Dockerfile
+  - .
+images:
+- us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv2
+timeout: 2400s
+options:
+  machineType: E2_HIGHCPU_8

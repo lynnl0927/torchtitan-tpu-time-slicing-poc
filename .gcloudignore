@@ -1,0 +1,5 @@
+.git/
+__pycache__/
+*.pyc
+_libtpu.so
+_libtpuv2.so
