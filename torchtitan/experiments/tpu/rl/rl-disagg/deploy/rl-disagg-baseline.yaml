@@ -80,15 +80,11 @@ spec:
             google.com/tpu: 8
       initContainers:
       - args:
-        - pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint
+        - gcloud storage cp -r 'gs://linglinll-gke-dev-libtpu/models/qwen3-0.6b/*' /checkpoint/
         command:
         - /bin/bash
         - -c
-        env:
-        - name: HF_TOKEN
-          value: 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
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
-        imagePullPolicy: Always
+        image: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
         name: download-model
         volumeMounts:
         - mountPath: /checkpoint
@@ -161,15 +157,11 @@ spec:
             google.com/tpu: 8
       initContainers:
       - args:
-        - pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint
+        - gcloud storage cp -r 'gs://linglinll-gke-dev-libtpu/models/qwen3-0.6b/*' /checkpoint/
         command:
         - /bin/bash
         - -c
-        env:
-        - name: HF_TOKEN
-          value: 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
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
-        imagePullPolicy: Always
+        image: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
         name: download-model
         volumeMounts:
         - mountPath: /checkpoint
@@ -198,16 +190,12 @@ spec:
       restartPolicy: Never
       initContainers:
       - name: download-model
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
-        imagePullPolicy: Always
+        image: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
         command:
         - /bin/bash
         - -c
         args:
-        - pip install huggingface_hub && hf download Qwen/Qwen3-0.6B --local-dir /checkpoint
-        env:
-        - name: HF_TOKEN
-          value: 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
+        - gcloud storage cp -r 'gs://linglinll-gke-dev-libtpu/models/qwen3-0.6b/*' /checkpoint/
         volumeMounts:
         - name: checkpoint-vol
           mountPath: /checkpoint
