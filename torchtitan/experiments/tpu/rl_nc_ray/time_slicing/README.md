@@ -56,11 +56,10 @@ locks.
 
 | Requirement | Value used |
 |---|---|
-| TPU generation | **v5e only** (`v5litepod-8`, topology `2x4`). v6e fails — the custom libtpu is v5e-era. |
+| TPU generation | **v5e only** (`v5litepod-8`, topology `2x4`). v6e untested with the v2 libtpu (the old build failed there at TPU init). |
 | GKE cluster | `tpu-cluster` in `us-central1` (project `linglinll-gke-dev`), two `tpu-v5e-8chip` nodes |
-| Custom libtpu | UDS-enabled build at `gs://linglinll-gke-dev-libtpu/_libtpu.so` (~667 MB). Stock libtpu lacks the HAL Unix socket. |
+| Custom libtpu | v2 checkpointing build at `gs://linglinll-gke-dev-libtpu/_libtpuv2.so` (~709 MB). Stock libtpu has no C/R. Must be enabled with `LIBTPU_CHECKPOINTING_ENABLED=true`. |
 | Worker image | `us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-ray:vllm-0612` (torch_tpu + Ray) |
-| grpcurl | v1.9.1 linux-amd64, staged into worker pods (drives the HAL gRPC) |
 
 All commands below assume:
 
@@ -120,16 +119,17 @@ kubectl --context $CTX rollout status deploy/ts-orchestrator
 ```
 
 The initContainer in each worker downloads the custom libtpu to an emptyDir at
-`/shared/_libtpu.so`; `TPU_LIBRARY_PATH` is already pointed at it.
+`/shared/_libtpuv2.so`; `TPU_LIBRARY_PATH` is already pointed at it and
+`LIBTPU_CHECKPOINTING_ENABLED=true` is set (v2 gates C/R behind it).
 
-## Stage the C/R tooling into the workers
+## Stage the workload into the workers
+
+C/R needs no external tooling — `workload.py` drives libtpu v2's control
+pipes directly.
 
 ```bash
-# grpcurl: download v1.9.1 linux-amd64 locally first, then copy into all 4 pods.
 for W in $(kubectl --context $CTX get pod -l ray.io/node-type=worker -o name | cut -d/ -f2); do
-  kubectl --context $CTX cp grpcurl     default/$W:/tmp/grpcurl     -c ray-worker
   kubectl --context $CTX cp workload.py default/$W:/tmp/workload.py -c ray-worker
-  kubectl --context $CTX exec $W -c ray-worker -- chmod +x /tmp/grpcurl
 done
 ```
 
@@ -144,7 +144,8 @@ immediately while the process detaches — this avoids the intermittent SIGTERM
 ORCH=http://ts-orchestrator.default.svc.cluster.local:9000
 launch() {  # launch <pod> <wid> <pool> <role> <peer-wid>
   kubectl --context $CTX exec "$1" -c ray-worker -- bash -c \
-    "cd /tmp; rm -f wl.log; setsid env TPU_LIBRARY_PATH=/shared/_libtpu.so \
+    "cd /tmp; rm -f wl.log; setsid env TPU_LIBRARY_PATH=/shared/_libtpuv2.so \
+       LIBTPU_CHECKPOINTING_ENABLED=true \
        ORCH_URL=$ORCH WID=$2 POOL=$3 ROLE=$4 PEER_WID=$5 STEPS=3 WL_PORT=9100 \
        python3 workload.py </dev/null >/tmp/wl.log 2>&1 & exit 0"
 }
@@ -194,7 +195,10 @@ restore must reproduce the pre-checkpoint checksum.
 ## How the pieces talk
 
 1. `workload.py` starts a threaded HTTP server exposing `/checkpoint`, `/restore`
-   (each runs `grpcurl -unix /run/tpu_hal_<pid>.sock tpu.TpuHalService/{Checkpoint,Restore}`)
+   (each drives libtpu v2's gVisor `tpu_control` pipes: the control thread
+   named `libtpu{RRRRSSSS}` encodes request/response pipe FDs, reached via
+   `/proc/self/fd/<N>` with length-prefixed protobuf Checkpoint/Restore
+   messages — see `../../rl/tpu-checkpoint` on the `checkpoint` branch)
    and `/go` (the peer's turn token).
 2. It `POST /register`s its own URL + pool with the orchestrator, then loops:
    wait for the peer token (gen skips this on step 1) → `POST /acquire`
@@ -220,10 +224,11 @@ gcloud container node-pools delete ray-head-pool --cluster tpu-cluster \
 
 ## Known limitations
 
-- **v5e only.** v6e fails at TPU init with the current custom libtpu (`connect to
-  [::]:8353`). Needs a v6e-compatible UDS-enabled libtpu build.
-- **Custom libtpu required.** Stock libtpu has no HAL Unix socket, so no C/R.
+- **v5e only.** The old libtpu build failed on v6e at TPU init (`connect to
+  [::]:8353`); the v2 build has not been re-tested on v6e.
+- **Custom libtpu required.** Stock libtpu has no C/R. The v2 build additionally
+  requires `LIBTPU_CHECKPOINTING_ENABLED=true` or the control pipes never exist.
 - **1 host per slice.** Validated on single-host `v5litepod-8` (`numOfHosts: 1`).
-  Multi-host slices need C/R fanned out across all hosts' sockets.
+  Multi-host slices need C/R fanned out across all hosts' processes.
 - **Proxy workload.** `workload.py` runs a matmul-checksum proxy, not the actual
   trainer + vLLM generator — that integration is the remaining work.

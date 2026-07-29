@@ -51,8 +51,8 @@ spec:
           args:
           - |
             set -e
-            gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpu.so /shared/_libtpu.so
-            ls -la /shared/_libtpu.so
+            gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpuv2.so /shared/_libtpuv2.so
+            ls -la /shared/_libtpuv2.so
           volumeMounts:
           - {mountPath: /shared, name: shared}
         containers:
@@ -62,7 +62,8 @@ spec:
           securityContext:
             privileged: true
           env:
-          - {name: TPU_LIBRARY_PATH, value: /shared/_libtpu.so}
+          - {name: TPU_LIBRARY_PATH, value: /shared/_libtpuv2.so}
+          - {name: LIBTPU_CHECKPOINTING_ENABLED, value: 'true'}
           resources:
             requests: {cpu: "24", google.com/tpu: "8", memory: 100Gi}
             limits: {google.com/tpu: "8", memory: 100Gi}
@@ -96,8 +97,8 @@ spec:
           args:
           - |
             set -e
-            gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpu.so /shared/_libtpu.so
-            ls -la /shared/_libtpu.so
+            gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpuv2.so /shared/_libtpuv2.so
+            ls -la /shared/_libtpuv2.so
           volumeMounts:
           - {mountPath: /shared, name: shared}
         containers:
@@ -107,7 +108,8 @@ spec:
           securityContext:
             privileged: true
           env:
-          - {name: TPU_LIBRARY_PATH, value: /shared/_libtpu.so}
+          - {name: TPU_LIBRARY_PATH, value: /shared/_libtpuv2.so}
+          - {name: LIBTPU_CHECKPOINTING_ENABLED, value: 'true'}
           resources:
             requests: {cpu: "24", google.com/tpu: "8", memory: 100Gi}
             limits: {google.com/tpu: "8", memory: 100Gi}
