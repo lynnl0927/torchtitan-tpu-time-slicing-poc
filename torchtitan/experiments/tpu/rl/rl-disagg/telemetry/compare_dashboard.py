@@ -31,6 +31,7 @@ import base64
 import csv
 import io
 import os
+import re
 from collections import defaultdict
 
 import matplotlib
@@ -213,6 +214,90 @@ def plot_per_chip(phase, t0, phase_label):
     return fig_to_b64(fig)
 
 
+CR_EVENT_RE = re.compile(
+    r"(\d\d:\d\d:\d\d),\d+ INFO \[(job-[ab])_(sampler|trainer)\] "
+    r"(checkpoint|restore) elapsed: (\d+)ms"
+)
+
+
+def load_cr_events(log_path):
+    """Parse checkpoint/restore durations from the orchestrator log.
+
+    Returns a list of (wall_hhmmss, job, pool, op, ms) in log order.
+    """
+    if not log_path or not os.path.exists(log_path):
+        return []
+    events = []
+    with open(log_path, errors="replace") as f:
+        for line in f:
+            m = CR_EVENT_RE.search(line)
+            if m:
+                events.append(
+                    (m.group(1), m.group(2), m.group(3), m.group(4), int(m.group(5)))
+                )
+    return events
+
+
+def plot_cr_times(events):
+    """1x2 bars: per-event checkpoint and restore durations, colored by pool."""
+    colors = {"sampler": COLOR_A, "trainer": COLOR_B}
+    fig, axes = plt.subplots(1, 2, figsize=(16, 4.5), sharey=True)
+    for ax, op in zip(axes, ("checkpoint", "restore")):
+        evs = [(w, pool, ms) for w, _, pool, o, ms in events if o == op]
+        xs = range(len(evs))
+        ax.bar(
+            xs,
+            [ms / 1000 for _, _, ms in evs],
+            color=[colors[p] for _, p, _ in evs],
+            alpha=0.8,
+        )
+        for pool, c in colors.items():
+            vals = [ms / 1000 for _, p, ms in evs if p == pool]
+            if vals:
+                ax.axhline(
+                    sum(vals) / len(vals),
+                    color=c,
+                    ls="--",
+                    lw=1,
+                    label=f"{pool} mean {sum(vals) / len(vals):.2f}s",
+                )
+        ax.set_xticks(list(xs))
+        ax.set_xticklabels([w for w, _, _ in evs], rotation=45, fontsize=7)
+        ax.set_title(f"{op} duration per event")
+        ax.set_ylabel("seconds")
+        ax.grid(alpha=0.3, axis="y")
+        ax.legend(fontsize=9)
+    fig.tight_layout()
+    return fig_to_b64(fig)
+
+
+def cr_table(events):
+    stats = defaultdict(list)
+    for _, _, pool, op, ms in events:
+        stats[(op, pool)].append(ms)
+    for op in ("checkpoint", "restore"):
+        combined = [ms for (o, _), v in stats.items() if o == op for ms in v]
+        if combined:
+            stats[(op, "all pools")] = combined
+    rows = []
+    for op in ("checkpoint", "restore"):
+        for pool in ("sampler", "trainer", "all pools"):
+            v = stats.get((op, pool))
+            if not v:
+                continue
+            bold = pool == "all pools"
+            b = ("<b>", "</b>") if bold else ("", "")
+            rows.append(
+                f"<tr><td>{b[0]}{op}{b[1]}</td><td>{b[0]}{pool}{b[1]}</td>"
+                f"<td>{len(v)}</td><td>{b[0]}{sum(v) / len(v):.0f} ms{b[1]}</td>"
+                f"<td>{min(v)} ms</td><td>{max(v)} ms</td></tr>"
+            )
+    return (
+        "<table><tr><th>Operation</th><th>Pool</th><th>Events</th>"
+        "<th>Mean</th><th>Min</th><th>Max</th></tr>" + "".join(rows) + "</table>"
+    )
+
+
 def phase_stats(phase):
     """Per node: avg duty over run, avg duty while active, % time active, avg HBM."""
     stats = {}
@@ -291,8 +376,14 @@ A detached (checkpointed) process reports 0%.</p>
 {summary}</div>
 <div class="card"><h2>1. Total node utilization — Baseline vs Time-slicing</h2>{overlay}</div>
 <div class="card"><h2>2. Per-node duty cycle by job (side by side)</h2>{nodes}</div>
-<div class="card"><h2>3. Per-chip detail — Baseline</h2>{chips_base}</div>
-<div class="card"><h2>4. Per-chip detail — Time-slicing</h2>{chips_ts}</div>
+<div class="card"><h2>3. Checkpoint / restore latency (time-slicing run)</h2>
+<p class="note">Per-event durations of libtpu pipe-based checkpoint (yield) and restore
+(acquire), parsed from the orchestrator log; 8 ranks per pool, DMA pipeline,
+32 MiB chunks. Trainer C/R carries more live state (optimizer + gradients)
+than sampler C/R (weights + KV cache).</p>
+{cr}</div>
+<div class="card"><h2>4. Per-chip detail — Baseline</h2>{chips_base}</div>
+<div class="card"><h2>5. Per-chip detail — Time-slicing</h2>{chips_ts}</div>
 </div></body></html>
 """
 
@@ -302,6 +393,12 @@ def main():
     ap.add_argument("--baseline-dir", required=True)
     ap.add_argument("--timeslice-dir", required=True)
     ap.add_argument("--output", default="dashboard.html")
+    ap.add_argument(
+        "--orchestrator-log",
+        default=None,
+        help="orchestrator log with C/R events "
+        "(default: <timeslice-dir>/orchestrator.log)",
+    )
     args = ap.parse_args()
 
     baseline, base_t0 = load_phase(args.baseline_dir, jobs=("a",))
@@ -314,14 +411,28 @@ def main():
     chips_base = plot_per_chip(baseline, base_t0, "Baseline")
     chips_ts = plot_per_chip(timeslice, ts_t0, "Time-slicing")
 
+    orch_log = args.orchestrator_log or os.path.join(
+        args.timeslice_dir, "orchestrator.log"
+    )
+    cr_events = load_cr_events(orch_log)
+    if cr_events:
+        cr_fig = plot_cr_times(cr_events)
+        cr_html = cr_table(cr_events) + f'<img src="data:image/png;base64,{cr_fig}">'
+    else:
+        print(f"warning: no C/R events found in {orch_log}; skipping that section")
+        cr_html = '<p class="note">No checkpoint/restore events found.</p>'
+
     out_dir = os.path.dirname(os.path.abspath(args.output))
     save_png(overlay, os.path.join(out_dir, "duty_overlay.png"))
     save_png(nodes, os.path.join(out_dir, "duty_by_node.png"))
+    if cr_events:
+        save_png(cr_fig, os.path.join(out_dir, "cr_times.png"))
 
     html = HTML_TEMPLATE.format(
         summary=summary_table(phase_stats(baseline), phase_stats(timeslice)),
         overlay=f'<img src="data:image/png;base64,{overlay}">',
         nodes=f'<img src="data:image/png;base64,{nodes}">',
+        cr=cr_html,
         chips_base=f'<img src="data:image/png;base64,{chips_base}">',
         chips_ts=f'<img src="data:image/png;base64,{chips_ts}">',
     )
