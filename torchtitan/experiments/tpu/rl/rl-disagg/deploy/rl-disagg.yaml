@@ -59,7 +59,7 @@ spec:
     spec:
       containers:
       - name: trainer-a
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv2
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv3
         imagePullPolicy: Always
         command:
         - python3
@@ -75,9 +75,13 @@ spec:
         - --checkpoint.enable
         env:
         - name: TPU_LIBRARY_PATH
-          value: /shared/_libtpuv2.so
+          value: /shared/_libtpuv3.so
         - name: LIBTPU_CHECKPOINTING_ENABLED
+          value: 'on'
+        - name: LIBTPU_CHECKPOINTING_USE_DMA_PIPELINE
           value: 'true'
+        - name: LIBTPU_CHECKPOINTING_CHUNK_SIZE
+          value: '33554432'
         - name: TPU_WORKER_HOSTNAMES
           valueFrom:
             fieldRef:
@@ -109,7 +113,7 @@ spec:
         - /bin/bash
         - -c
         args:
-        - gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpuv2.so /shared/_libtpuv2.so
+        - gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpuv3.so /shared/_libtpuv3.so
         volumeMounts:
         - mountPath: /shared
           name: shared-libtpu
@@ -154,7 +158,7 @@ spec:
     spec:
       containers:
       - name: trainer-b
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv2
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv3
         imagePullPolicy: Always
         command:
         - python3
@@ -171,9 +175,13 @@ spec:
         - --checkpoint.enable
         env:
         - name: TPU_LIBRARY_PATH
-          value: /shared/_libtpuv2.so
+          value: /shared/_libtpuv3.so
         - name: LIBTPU_CHECKPOINTING_ENABLED
+          value: 'on'
+        - name: LIBTPU_CHECKPOINTING_USE_DMA_PIPELINE
           value: 'true'
+        - name: LIBTPU_CHECKPOINTING_CHUNK_SIZE
+          value: '33554432'
         - name: DEFER_INIT
           value: 'true'
         - name: ENABLE_RUNTIME_UPTIME_TELEMETRY
@@ -228,7 +236,7 @@ spec:
         - /bin/bash
         - -c
         args:
-        - gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpuv2.so /shared/_libtpuv2.so
+        - gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpuv3.so /shared/_libtpuv3.so
         volumeMounts:
         - mountPath: /shared
           name: shared-libtpu
@@ -283,7 +291,7 @@ spec:
     spec:
       containers:
       - name: sampler-a
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv2
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv3
         imagePullPolicy: Always
         command:
         - python3
@@ -299,9 +307,13 @@ spec:
         - --checkpoint.enable
         env:
         - name: TPU_LIBRARY_PATH
-          value: /shared/_libtpuv2.so
+          value: /shared/_libtpuv3.so
         - name: LIBTPU_CHECKPOINTING_ENABLED
+          value: 'on'
+        - name: LIBTPU_CHECKPOINTING_USE_DMA_PIPELINE
           value: 'true'
+        - name: LIBTPU_CHECKPOINTING_CHUNK_SIZE
+          value: '33554432'
         - name: TPU_WORKER_HOSTNAMES
           valueFrom:
             fieldRef:
@@ -333,7 +345,7 @@ spec:
         - /bin/bash
         - -c
         args:
-        - gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpuv2.so /shared/_libtpuv2.so
+        - gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpuv3.so /shared/_libtpuv3.so
         volumeMounts:
         - mountPath: /shared
           name: shared-libtpu
@@ -378,7 +390,7 @@ spec:
     spec:
       containers:
       - name: sampler-b
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv2
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv3
         imagePullPolicy: Always
         command:
         - python3
@@ -395,9 +407,13 @@ spec:
         - --checkpoint.enable
         env:
         - name: TPU_LIBRARY_PATH
-          value: /shared/_libtpuv2.so
+          value: /shared/_libtpuv3.so
         - name: LIBTPU_CHECKPOINTING_ENABLED
+          value: 'on'
+        - name: LIBTPU_CHECKPOINTING_USE_DMA_PIPELINE
           value: 'true'
+        - name: LIBTPU_CHECKPOINTING_CHUNK_SIZE
+          value: '33554432'
         - name: DEFER_INIT
           value: 'true'
         - name: ENABLE_RUNTIME_UPTIME_TELEMETRY
@@ -452,7 +468,7 @@ spec:
         - /bin/bash
         - -c
         args:
-        - gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpuv2.so /shared/_libtpuv2.so
+        - gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpuv3.so /shared/_libtpuv3.so
         volumeMounts:
         - mountPath: /shared
           name: shared-libtpu
@@ -519,7 +535,7 @@ spec:
           mountPath: /checkpoint
       containers:
       - name: driver
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv2
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv3
         imagePullPolicy: Always
         command:
         - /bin/bash
@@ -593,7 +609,7 @@ spec:
           mountPath: /checkpoint
       containers:
       - name: driver
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv2
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv3
         imagePullPolicy: Always
         command:
         - /bin/bash
@@ -659,7 +675,7 @@ spec:
     spec:
       containers:
       - name: orchestrator
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv2
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv3
         imagePullPolicy: Always
         command:
         - /bin/bash

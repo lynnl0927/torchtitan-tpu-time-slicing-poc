@@ -41,7 +41,7 @@ spec:
     spec:
       containers:
       - name: trainer-a
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv3
         imagePullPolicy: Always
         command:
         - python3
@@ -56,6 +56,14 @@ spec:
         - --checkpoint.initial_load_in_hf
         - --checkpoint.enable
         env:
+        - name: TPU_LIBRARY_PATH
+          value: /shared/_libtpuv3.so
+        - name: LIBTPU_CHECKPOINTING_ENABLED
+          value: 'on'
+        - name: LIBTPU_CHECKPOINTING_USE_DMA_PIPELINE
+          value: 'true'
+        - name: LIBTPU_CHECKPOINTING_CHUNK_SIZE
+          value: '33554432'
         - name: TPU_WORKER_HOSTNAMES
           valueFrom:
             fieldRef:
@@ -69,6 +77,8 @@ spec:
         - name: BROADCAST_PORT
           value: '18000'
         volumeMounts:
+        - mountPath: /shared
+          name: shared-libtpu
         - mountPath: /dev/shm
           name: dshm
         - mountPath: /checkpoint
@@ -79,6 +89,16 @@ spec:
           limits:
             google.com/tpu: 8
       initContainers:
+      - name: stage-libtpu
+        image: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+        command:
+        - /bin/bash
+        - -c
+        args:
+        - gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpuv3.so /shared/_libtpuv3.so
+        volumeMounts:
+        - mountPath: /shared
+          name: shared-libtpu
       - args:
         - gcloud storage cp -r 'gs://linglinll-gke-dev-libtpu/models/qwen3-0.6b/*' /checkpoint/
         command:
@@ -94,6 +114,8 @@ spec:
         cloud.google.com/gke-tpu-topology: 2x4
       restartPolicy: Never
       volumes:
+      - emptyDir: {}
+        name: shared-libtpu
       - emptyDir:
           medium: Memory
         name: dshm
@@ -118,7 +140,7 @@ spec:
     spec:
       containers:
       - name: sampler-a
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv3
         imagePullPolicy: Always
         command:
         - python3
@@ -133,6 +155,14 @@ spec:
         - --checkpoint.initial_load_in_hf
         - --checkpoint.enable
         env:
+        - name: TPU_LIBRARY_PATH
+          value: /shared/_libtpuv3.so
+        - name: LIBTPU_CHECKPOINTING_ENABLED
+          value: 'on'
+        - name: LIBTPU_CHECKPOINTING_USE_DMA_PIPELINE
+          value: 'true'
+        - name: LIBTPU_CHECKPOINTING_CHUNK_SIZE
+          value: '33554432'
         - name: TPU_WORKER_HOSTNAMES
           valueFrom:
             fieldRef:
@@ -146,6 +176,8 @@ spec:
         - name: BROADCAST_PORT
           value: '18001'
         volumeMounts:
+        - mountPath: /shared
+          name: shared-libtpu
         - mountPath: /dev/shm
           name: dshm
         - mountPath: /checkpoint
@@ -156,6 +188,16 @@ spec:
           limits:
             google.com/tpu: 8
       initContainers:
+      - name: stage-libtpu
+        image: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+        command:
+        - /bin/bash
+        - -c
+        args:
+        - gcloud storage cp gs://linglinll-gke-dev-libtpu/_libtpuv3.so /shared/_libtpuv3.so
+        volumeMounts:
+        - mountPath: /shared
+          name: shared-libtpu
       - args:
         - gcloud storage cp -r 'gs://linglinll-gke-dev-libtpu/models/qwen3-0.6b/*' /checkpoint/
         command:
@@ -171,6 +213,8 @@ spec:
         cloud.google.com/gke-tpu-topology: 2x4
       restartPolicy: Never
       volumes:
+      - emptyDir: {}
+        name: shared-libtpu
       - emptyDir:
           medium: Memory
         name: dshm
@@ -201,7 +245,7 @@ spec:
           mountPath: /checkpoint
       containers:
       - name: driver
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv3
         imagePullPolicy: Always
         command:
         - /bin/bash
@@ -267,7 +311,7 @@ spec:
     spec:
       containers:
       - name: orchestrator
-        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:testcheckpoint
+        image: us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv3
         imagePullPolicy: Always
         command:
         - /bin/bash

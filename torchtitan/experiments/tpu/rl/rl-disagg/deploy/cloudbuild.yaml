@@ -9,12 +9,12 @@ steps:
   args:
   - build
   - -t
-  - us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv2
+  - us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv3
   - -f
   - torchtitan/experiments/tpu/rl/rl-disagg/deploy/Dockerfile
   - .
 images:
-- us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv2
+- us-central1-docker.pkg.dev/linglinll-gke-dev/test/torchtitan-rl:libtpuv3
 timeout: 2400s
 options:
   machineType: E2_HIGHCPU_8
