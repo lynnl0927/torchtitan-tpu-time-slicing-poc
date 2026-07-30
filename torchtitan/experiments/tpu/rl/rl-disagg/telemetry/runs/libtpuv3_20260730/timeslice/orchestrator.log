@@ -1,0 +1,170 @@
+Requirement already satisfied: fastapi in /usr/local/lib/python3.12/site-packages (0.141.1)
+Requirement already satisfied: uvicorn in /usr/local/lib/python3.12/site-packages (0.52.0)
+Requirement already satisfied: pydantic in /usr/local/lib/python3.12/site-packages (2.13.4)
+Requirement already satisfied: grpcio in /usr/local/lib/python3.12/site-packages (1.83.0)
+Requirement already satisfied: starlette>=0.46.0 in /usr/local/lib/python3.12/site-packages (from fastapi) (1.3.1)
+Requirement already satisfied: typing-extensions>=4.8.0 in /usr/local/lib/python3.12/site-packages (from fastapi) (4.16.0)
+Requirement already satisfied: typing-inspection>=0.4.2 in /usr/local/lib/python3.12/site-packages (from fastapi) (0.4.2)
+Requirement already satisfied: annotated-doc>=0.0.2 in /usr/local/lib/python3.12/site-packages (from fastapi) (0.0.5)
+Requirement already satisfied: click>=7.0 in /usr/local/lib/python3.12/site-packages (from uvicorn) (8.4.2)
+Requirement already satisfied: h11>=0.8 in /usr/local/lib/python3.12/site-packages (from uvicorn) (0.16.0)
+Requirement already satisfied: annotated-types>=0.6.0 in /usr/local/lib/python3.12/site-packages (from pydantic) (0.8.0)
+Requirement already satisfied: pydantic-core==2.46.4 in /usr/local/lib/python3.12/site-packages (from pydantic) (2.46.4)
+Requirement already satisfied: anyio<5,>=3.6.2 in /usr/local/lib/python3.12/site-packages (from starlette>=0.46.0->fastapi) (4.14.2)
+Requirement already satisfied: idna>=2.8 in /usr/local/lib/python3.12/site-packages (from anyio<5,>=3.6.2->starlette>=0.46.0->fastapi) (3.18)
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+INFO:     Started server process [1]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:9000 (Press CTRL+C to quit)
+2026-07-30 16:47:23,833 INFO [job-b_sampler] Registered pool=sampler pids=[] node=
+INFO:     10.100.15.8:42998 - "POST /register HTTP/1.1" 200 OK
+2026-07-30 16:47:23,844 INFO [job-b_trainer] Registered pool=trainer pids=[] node=
+INFO:     10.100.15.8:43000 - "POST /register HTTP/1.1" 200 OK
+2026-07-30 16:47:23,853 INFO [job-b_sampler] Acquiring pool=sampler (holder=None)
+2026-07-30 16:47:23,853 INFO [job-b_sampler] Acquired step=1 wait_ms=0 restore_ms=0
+INFO:     10.100.15.8:43002 - "POST /acquire HTTP/1.1" 200 OK
+2026-07-30 16:47:29,640 INFO [job-a_sampler] Registered pool=sampler pids=[] node=
+INFO:     10.100.19.14:52744 - "POST /register HTTP/1.1" 200 OK
+2026-07-30 16:47:29,645 INFO [job-a_trainer] Registered pool=trainer pids=[] node=
+INFO:     10.100.19.14:52754 - "POST /register HTTP/1.1" 200 OK
+2026-07-30 16:47:29,653 INFO [job-a_sampler] Acquiring pool=sampler (holder=job-b_sampler)
+2026-07-30 16:52:11,068 INFO [job-b_sampler] Checkpointing
+2026-07-30 16:52:11,069 INFO [job-b_sampler] Calling http://sampler-b-service:8003/checkpoint
+2026-07-30 16:52:13,167 INFO [job-b_sampler] checkpoint elapsed: 2099ms result={'status': 'ok'}
+2026-07-30 16:52:13,167 INFO [job-b_sampler] Yielded checkpoint_ms=2099
+2026-07-30 16:52:13,167 INFO [job-a_sampler] Acquired step=1 wait_ms=283514 restore_ms=0
+INFO:     10.100.19.14:52760 - "POST /acquire HTTP/1.1" 200 OK
+INFO:     10.100.15.8:53006 - "POST /yield HTTP/1.1" 200 OK
+2026-07-30 16:52:13,179 INFO [job-b_trainer] Acquiring pool=trainer (holder=None)
+2026-07-30 16:52:13,179 INFO [job-b_trainer] Acquired step=1 wait_ms=0 restore_ms=0
+INFO:     10.100.15.8:53022 - "POST /acquire HTTP/1.1" 200 OK
+2026-07-30 16:56:40,250 INFO [job-b_trainer] Checkpointing
+2026-07-30 16:56:40,251 INFO [job-b_trainer] Calling http://trainer-b-service:8002/checkpoint
+2026-07-30 16:56:43,077 INFO [job-b_trainer] checkpoint elapsed: 2826ms result={'status': 'ok'}
+2026-07-30 16:56:43,077 INFO [job-b_trainer] Yielded checkpoint_ms=2826
+INFO:     10.100.15.8:48162 - "POST /yield HTTP/1.1" 200 OK
+2026-07-30 16:56:43,083 INFO [job-b_sampler] Acquiring pool=sampler (holder=job-a_sampler)
+2026-07-30 16:56:59,493 INFO [job-a_sampler] Checkpointing
+2026-07-30 16:56:59,493 INFO [job-a_sampler] Calling http://sampler-a-service:8001/checkpoint
+2026-07-30 16:57:01,590 INFO [job-a_sampler] checkpoint elapsed: 2098ms result={'status': 'ok'}
+2026-07-30 16:57:01,591 INFO [job-a_sampler] Yielded checkpoint_ms=2098
+2026-07-30 16:57:01,591 INFO [job-b_sampler] Restoring
+2026-07-30 16:57:01,591 INFO [job-b_sampler] Calling http://sampler-b-service:8003/restore
+INFO:     10.100.19.14:44026 - "POST /yield HTTP/1.1" 200 OK
+2026-07-30 16:57:01,605 INFO [job-a_trainer] Acquiring pool=trainer (holder=None)
+2026-07-30 16:57:01,605 INFO [job-a_trainer] Acquired step=1 wait_ms=0 restore_ms=0
+INFO:     10.100.19.14:44030 - "POST /acquire HTTP/1.1" 200 OK
+2026-07-30 16:57:05,428 INFO [job-b_sampler] restore elapsed: 3837ms result={'status': 'ok'}
+2026-07-30 16:57:05,428 INFO [job-b_sampler] Acquired step=2 wait_ms=18508 restore_ms=3837
+INFO:     10.100.15.8:48176 - "POST /acquire HTTP/1.1" 200 OK
+2026-07-30 17:01:32,250 INFO [job-a_trainer] Checkpointing
+2026-07-30 17:01:32,250 INFO [job-a_trainer] Calling http://trainer-a-service:8000/checkpoint
+2026-07-30 17:01:34,932 INFO [job-a_trainer] checkpoint elapsed: 2682ms result={'status': 'ok'}
+2026-07-30 17:01:34,932 INFO [job-a_trainer] Yielded checkpoint_ms=2682
+INFO:     10.100.19.14:42054 - "POST /yield HTTP/1.1" 200 OK
+2026-07-30 17:01:34,938 INFO [job-a_sampler] Acquiring pool=sampler (holder=job-b_sampler)
+2026-07-30 17:01:48,783 INFO [job-b_sampler] Checkpointing
+2026-07-30 17:01:48,783 INFO [job-b_sampler] Calling http://sampler-b-service:8003/checkpoint
+2026-07-30 17:01:50,942 INFO [job-b_sampler] checkpoint elapsed: 2159ms result={'status': 'ok'}
+2026-07-30 17:01:50,943 INFO [job-b_sampler] Yielded checkpoint_ms=2159
+2026-07-30 17:01:50,943 INFO [job-a_sampler] Restoring
+2026-07-30 17:01:50,943 INFO [job-a_sampler] Calling http://sampler-a-service:8001/restore
+INFO:     10.100.15.8:60494 - "POST /yield HTTP/1.1" 200 OK
+2026-07-30 17:01:50,953 INFO [job-b_trainer] Acquiring pool=trainer (holder=None)
+2026-07-30 17:01:50,953 INFO [job-b_trainer] Restoring
+2026-07-30 17:01:50,953 INFO [job-b_trainer] Calling http://trainer-b-service:8002/restore
+2026-07-30 17:01:54,784 INFO [job-a_sampler] restore elapsed: 3841ms result={'status': 'ok'}
+2026-07-30 17:01:54,784 INFO [job-a_sampler] Acquired step=2 wait_ms=16005 restore_ms=3841
+INFO:     10.100.19.14:47416 - "POST /acquire HTTP/1.1" 200 OK
+2026-07-30 17:01:55,143 INFO [job-b_trainer] restore elapsed: 4190ms result={'status': 'ok'}
+2026-07-30 17:01:55,143 INFO [job-b_trainer] Acquired step=2 wait_ms=0 restore_ms=4190
+INFO:     10.100.15.8:60504 - "POST /acquire HTTP/1.1" 200 OK
+2026-07-30 17:06:26,634 INFO [job-b_trainer] Checkpointing
+2026-07-30 17:06:26,635 INFO [job-b_trainer] Calling http://trainer-b-service:8002/checkpoint
+2026-07-30 17:06:29,274 INFO [job-b_trainer] checkpoint elapsed: 2640ms result={'status': 'ok'}
+2026-07-30 17:06:29,275 INFO [job-b_trainer] Yielded checkpoint_ms=2640
+INFO:     10.100.15.8:38674 - "POST /yield HTTP/1.1" 200 OK
+2026-07-30 17:06:29,280 INFO [job-b_sampler] Acquiring pool=sampler (holder=job-a_sampler)
+2026-07-30 17:06:38,741 INFO [job-a_sampler] Checkpointing
+2026-07-30 17:06:38,741 INFO [job-a_sampler] Calling http://sampler-a-service:8001/checkpoint
+2026-07-30 17:06:40,847 INFO [job-a_sampler] checkpoint elapsed: 2107ms result={'status': 'ok'}
+2026-07-30 17:06:40,848 INFO [job-a_sampler] Yielded checkpoint_ms=2107
+2026-07-30 17:06:40,848 INFO [job-b_sampler] Restoring
+2026-07-30 17:06:40,848 INFO [job-b_sampler] Calling http://sampler-b-service:8003/restore
+INFO:     10.100.19.14:58350 - "POST /yield HTTP/1.1" 200 OK
+2026-07-30 17:06:40,859 INFO [job-a_trainer] Acquiring pool=trainer (holder=None)
+2026-07-30 17:06:40,860 INFO [job-a_trainer] Restoring
+2026-07-30 17:06:40,860 INFO [job-a_trainer] Calling http://trainer-a-service:8000/restore
+2026-07-30 17:06:44,706 INFO [job-b_sampler] restore elapsed: 3858ms result={'status': 'ok'}
+2026-07-30 17:06:44,706 INFO [job-b_sampler] Acquired step=3 wait_ms=11568 restore_ms=3858
+INFO:     10.100.15.8:48642 - "POST /acquire HTTP/1.1" 200 OK
+2026-07-30 17:06:45,042 INFO [job-a_trainer] restore elapsed: 4182ms result={'status': 'ok'}
+2026-07-30 17:06:45,042 INFO [job-a_trainer] Acquired step=2 wait_ms=0 restore_ms=4182
+INFO:     10.100.19.14:58358 - "POST /acquire HTTP/1.1" 200 OK
+2026-07-30 17:11:14,696 INFO [job-a_trainer] Checkpointing
+2026-07-30 17:11:14,697 INFO [job-a_trainer] Calling http://trainer-a-service:8000/checkpoint
+2026-07-30 17:11:17,442 INFO [job-a_trainer] checkpoint elapsed: 2746ms result={'status': 'ok'}
+2026-07-30 17:11:17,442 INFO [job-a_trainer] Yielded checkpoint_ms=2746
+INFO:     10.100.19.14:60188 - "POST /yield HTTP/1.1" 200 OK
+2026-07-30 17:11:17,449 INFO [job-a_sampler] Acquiring pool=sampler (holder=job-b_sampler)
+2026-07-30 17:11:46,844 INFO [job-b_sampler] Checkpointing
+2026-07-30 17:11:46,844 INFO [job-b_sampler] Calling http://sampler-b-service:8003/checkpoint
+2026-07-30 17:11:48,838 INFO [job-b_sampler] checkpoint elapsed: 1994ms result={'status': 'ok'}
+2026-07-30 17:11:48,838 INFO [job-b_sampler] Yielded checkpoint_ms=1994
+2026-07-30 17:11:48,838 INFO [job-a_sampler] Restoring
+2026-07-30 17:11:48,838 INFO [job-a_sampler] Calling http://sampler-a-service:8001/restore
+INFO:     10.100.15.8:35094 - "POST /yield HTTP/1.1" 200 OK
+2026-07-30 17:11:48,851 INFO [job-b_trainer] Acquiring pool=trainer (holder=None)
+2026-07-30 17:11:48,851 INFO [job-b_trainer] Restoring
+2026-07-30 17:11:48,851 INFO [job-b_trainer] Calling http://trainer-b-service:8002/restore
+2026-07-30 17:11:52,551 INFO [job-a_sampler] restore elapsed: 3712ms result={'status': 'ok'}
+2026-07-30 17:11:52,551 INFO [job-a_sampler] Acquired step=3 wait_ms=31390 restore_ms=3712
+INFO:     10.100.19.14:60190 - "POST /acquire HTTP/1.1" 200 OK
+2026-07-30 17:11:52,839 INFO [job-b_trainer] restore elapsed: 3988ms result={'status': 'ok'}
+2026-07-30 17:11:52,839 INFO [job-b_trainer] Acquired step=3 wait_ms=0 restore_ms=3988
+INFO:     10.100.15.8:34864 - "POST /acquire HTTP/1.1" 200 OK
+2026-07-30 17:16:33,291 INFO [job-b_trainer] Checkpointing
+2026-07-30 17:16:33,291 INFO [job-b_trainer] Calling http://trainer-b-service:8002/checkpoint
+2026-07-30 17:16:36,124 INFO [job-b_trainer] checkpoint elapsed: 2833ms result={'status': 'ok'}
+2026-07-30 17:16:36,124 INFO [job-b_trainer] Yielded checkpoint_ms=2833
+INFO:     10.100.15.8:54496 - "POST /yield HTTP/1.1" 200 OK
+2026-07-30 17:16:36,131 INFO [job-b_sampler] Acquiring pool=sampler (holder=job-a_sampler)
+2026-07-30 17:16:53,173 INFO [job-a_sampler] Checkpointing
+2026-07-30 17:16:53,173 INFO [job-a_sampler] Calling http://sampler-a-service:8001/checkpoint
+2026-07-30 17:16:55,182 INFO [job-a_sampler] checkpoint elapsed: 2009ms result={'status': 'ok'}
+2026-07-30 17:16:55,182 INFO [job-a_sampler] Yielded checkpoint_ms=2009
+2026-07-30 17:16:55,182 INFO [job-b_sampler] Restoring
+2026-07-30 17:16:55,182 INFO [job-b_sampler] Calling http://sampler-b-service:8003/restore
+INFO:     10.100.19.14:37388 - "POST /yield HTTP/1.1" 200 OK
+2026-07-30 17:16:55,193 INFO [job-a_trainer] Acquiring pool=trainer (holder=None)
+2026-07-30 17:16:55,193 INFO [job-a_trainer] Restoring
+2026-07-30 17:16:55,193 INFO [job-a_trainer] Calling http://trainer-a-service:8000/restore
+2026-07-30 17:16:59,036 INFO [job-b_sampler] restore elapsed: 3854ms result={'status': 'ok'}
+2026-07-30 17:16:59,036 INFO [job-b_sampler] Acquired step=4 wait_ms=19051 restore_ms=3854
+INFO:     10.100.15.8:54498 - "POST /acquire HTTP/1.1" 200 OK
+2026-07-30 17:16:59,334 INFO [job-a_trainer] restore elapsed: 4141ms result={'status': 'ok'}
+2026-07-30 17:16:59,334 INFO [job-a_trainer] Acquired step=3 wait_ms=0 restore_ms=4141
+INFO:     10.100.19.14:37394 - "POST /acquire HTTP/1.1" 200 OK
+2026-07-30 17:21:28,572 INFO [job-a_trainer] Checkpointing
+2026-07-30 17:21:28,572 INFO [job-a_trainer] Calling http://trainer-a-service:8000/checkpoint
+2026-07-30 17:21:31,500 INFO [job-a_trainer] checkpoint elapsed: 2929ms result={'status': 'ok'}
+2026-07-30 17:21:31,501 INFO [job-a_trainer] Yielded checkpoint_ms=2929
+INFO:     10.100.19.14:51010 - "POST /yield HTTP/1.1" 200 OK
+2026-07-30 17:21:31,506 INFO [job-a_sampler] Acquiring pool=sampler (holder=job-b_sampler)
+2026-07-30 17:21:59,880 INFO [job-b_sampler] Checkpointing
+2026-07-30 17:21:59,880 INFO [job-b_sampler] Calling http://sampler-b-service:8003/checkpoint
+2026-07-30 17:22:02,038 INFO [job-b_sampler] checkpoint elapsed: 2158ms result={'status': 'ok'}
+2026-07-30 17:22:02,038 INFO [job-b_sampler] Yielded checkpoint_ms=2158
+2026-07-30 17:22:02,038 INFO [job-a_sampler] Restoring
+2026-07-30 17:22:02,038 INFO [job-a_sampler] Calling http://sampler-a-service:8001/restore
+INFO:     10.100.15.8:43138 - "POST /yield HTTP/1.1" 200 OK
+2026-07-30 17:22:02,050 INFO [job-b_trainer] Acquiring pool=trainer (holder=None)
+2026-07-30 17:22:02,051 INFO [job-b_trainer] Restoring
+2026-07-30 17:22:02,051 INFO [job-b_trainer] Calling http://trainer-b-service:8002/restore
+2026-07-30 17:22:05,848 INFO [job-a_sampler] restore elapsed: 3810ms result={'status': 'ok'}
+2026-07-30 17:22:05,848 INFO [job-a_sampler] Acquired step=4 wait_ms=30532 restore_ms=3810
+INFO:     10.100.19.14:51024 - "POST /acquire HTTP/1.1" 200 OK
+2026-07-30 17:22:06,163 INFO [job-b_trainer] restore elapsed: 4112ms result={'status': 'ok'}
+2026-07-30 17:22:06,163 INFO [job-b_trainer] Acquired step=4 wait_ms=0 restore_ms=4112
+INFO:     10.100.15.8:43150 - "POST /acquire HTTP/1.1" 200 OK
